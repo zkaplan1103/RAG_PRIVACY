@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Data — never commit raw corpora or computed indexes
+data/raw/
+data/processed/
+data/index/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Misc
+.DS_Store
+*.log
