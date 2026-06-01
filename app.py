@@ -3,13 +3,14 @@
 Ask plain-English questions about privacy policies. Every answer cites the exact clause.
 
 Run: uv run streamlit run app.py
-
-Phase 1: uses canned_answer() stub until Phase 2 integration wires in the real answer().
 """
+import os
+
 import streamlit as st
 
-from src.policylens.generate import Answer, canned_answer
 from src.policylens.config import DEFAULT_CONFIG
+from src.policylens.generate import Answer, answer
+from src.policylens.retrieve import ChromaRetriever
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -19,6 +20,13 @@ st.set_page_config(
     page_icon="🔍",
     layout="centered",
 )
+
+# ---------------------------------------------------------------------------
+# Cached retriever — loaded once per Streamlit process
+# ---------------------------------------------------------------------------
+@st.cache_resource
+def get_retriever():
+    return ChromaRetriever(DEFAULT_CONFIG)
 
 # ---------------------------------------------------------------------------
 # Header
@@ -34,12 +42,11 @@ st.divider()
 # Sidebar — policy selector + settings
 # ---------------------------------------------------------------------------
 KNOWN_POLICIES = {
-    "fixture_policy": "Fixture Policy (stub)",
+    "105_amazon_com": "Amazon",
     "1017_sci_news_com": "Sci-News.com",
     "1028_redorbit_com": "RedOrbit.com",
     "1034_aol_com": "AOL",
     "1050_honda_com": "Honda",
-    "105_amazon_com": "Amazon",
 }
 
 with st.sidebar:
@@ -60,6 +67,31 @@ with st.sidebar:
         "(Wilson et al., ACL 2016).  \n"
         "Research/teaching use only."
     )
+
+# ---------------------------------------------------------------------------
+# API key check
+# ---------------------------------------------------------------------------
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    st.error(
+        "**ANTHROPIC_API_KEY not set.** "
+        "Export it in your shell before running: `export ANTHROPIC_API_KEY=sk-...`"
+    )
+    st.stop()
+
+# Check that the index has been built
+try:
+    retriever = get_retriever()
+    import chromadb
+    _client = chromadb.PersistentClient(path=DEFAULT_CONFIG.index_dir)
+    _col = _client.get_collection("policylens")
+    if _col.count() == 0:
+        st.error(
+            "**Index not built yet.** Run `make index` (or `uv run python -m policylens.index build`) first."
+        )
+        st.stop()
+except Exception as e:
+    st.error(f"**Could not load index:** {e}  \nRun `make index` to build it.")
+    st.stop()
 
 # ---------------------------------------------------------------------------
 # Query input
@@ -89,8 +121,7 @@ ask_clicked = st.button("Ask", type="primary", disabled=not query.strip())
 # ---------------------------------------------------------------------------
 if ask_clicked and query.strip():
     with st.spinner("Retrieving and generating…"):
-        # Phase 2 integration: replace canned_answer with real answer() call
-        result: Answer = canned_answer(policy_id=policy_id)
+        result: Answer = answer(query, policy_id, retriever, DEFAULT_CONFIG)
 
     st.divider()
 
