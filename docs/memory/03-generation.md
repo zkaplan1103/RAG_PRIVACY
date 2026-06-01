@@ -15,3 +15,11 @@ tags: [generation]
 - LLM call: Anthropic Python SDK, model from cfg.gen_model (`claude-haiku-4-5` dev).
 - Abstention message: use the constant `ABSTENTION_TEXT` defined in generate.py.
 - `model` field in Answer: set to the actual model string used (cfg.gen_model).
+
+## 2026-06-01 | rag-engineer (Phase 1)
+- Prompt shape: system instructs "answer from context only / cite [N] / say UNANSWERABLE if not supported"; user provides numbered clauses + question
+- Two abstention paths: (1) pre-LLM score_floor check; (2) LLM returns "UNANSWERABLE"
+- Citation extraction: parse [N] refs in answer text → look up hits[N-1]; fallback to top hit if no refs found
+- Quote: most query-relevant sentence from chunk text, truncated to 25 words
+- anthropic imported at module level so patch("src.policylens.generate.anthropic.Anthropic") works in tests
+- 9/9 tests pass (all mocked, no API key required)
