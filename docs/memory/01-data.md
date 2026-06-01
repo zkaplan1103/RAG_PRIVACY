@@ -17,3 +17,11 @@ tags: [data]
 - Output: `data/processed/chunks.jsonl` — one JSON object per line, Chunk schema from docs/CONTRACTS.md §1.
 - Chunk target: 150–400 tokens. Split on OPP-115 data-practice categories as natural section boundaries.
 - `chunk_id` format: `{policy_id}::{section_slug}::c{index:03d}` — must be deterministic and unique.
+
+## 2026-06-01 | data-engineer (Phase 1)
+- 115 policies parsed, 2393 chunks written to `data/processed/chunks.jsonl`
+- Section distribution: top categories include "Other", "First Party Collection/Use", "Third Party Sharing/Collection", "Data Security", "Policy Change", "User Choice/Control"
+- Sanitized HTML format: segments separated by "|||"; annotations CSV has no header (cols: annotation_id, batch_id, annotator_id, policy_id, segment_id, category, attrs_json, date, url)
+- Chunking: adjacent same-category segments merged; oversized chunks split at sentence boundaries (MAX_CHARS=1600 ≈ 400 tokens)
+- Fixture updated: 10 real chunks from 4 policies (sci-news.com, redorbit.com, aol.com, honda.com), 9 distinct sections
+- Regenerate: `uv run python -c "from src.policylens.ingest import ingest; from src.policylens.config import DEFAULT_CONFIG; ingest('data/raw/opp115', 'data/processed/chunks.jsonl', DEFAULT_CONFIG)"`
