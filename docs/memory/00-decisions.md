@@ -15,3 +15,4 @@ Format: `YYYY-MM-DD | agent | decision`
 2026-06-01 | data-engineer | Chunking strategy: merge adjacent same-category segments → split at sentence boundaries if >1600 chars (≈400 tokens). 115 policies → 2393 chunks.
 2026-06-01 | index-engineer | numpy pinned to <2.0 for torch 2.2 ABI compat. Chroma score = 1 - cosine_distance. Cache via collection.count()>0.
 2026-06-01 | rag-engineer | Two abstention paths: score_floor pre-LLM + UNANSWERABLE post-LLM. Citations from [N] markers in answer text.
+2026-06-01 | ui-engineer | Sidebar policy dropdown (KNOWN_POLICIES dict). Phase 2 swap point marked with comment in app.py.
