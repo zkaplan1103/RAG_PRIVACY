@@ -12,3 +12,4 @@ Format: `YYYY-MM-DD | agent | decision`
 2026-06-01 | orchestrator | PrivacyQA acquired via git clone (AbhilashaRavichander/PrivacyQA_EMNLP): 185,200 train rows + 62,150 test rows in data/raw/privacyqa/data/. License: MIT.
 2026-06-01 | orchestrator | torch pinned to 2.2.x, sentence-transformers to 2.7.x, onnxruntime overridden to 1.23.2 — macOS x86_64 has no wheels for newer onnxruntime/torch. Record in pyproject.toml [tool.uv] override-dependencies.
 2026-06-01 | orchestrator | All 7 contract tests pass + 5/5 smoke test (stub mode) pass. Phase 0 complete. Ready for Phase 1.
+2026-06-01 | rag-engineer | Two abstention paths: score_floor pre-LLM + UNANSWERABLE post-LLM. Citations from [N] markers in answer text.
