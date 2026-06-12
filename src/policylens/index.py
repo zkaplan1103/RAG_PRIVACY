@@ -4,11 +4,13 @@ Build command: uv run python -m policylens.index build
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
+from typing import Any, cast
 
-from .config import Config, DEFAULT_CONFIG
+import numpy as np
+
+from .config import DEFAULT_CONFIG, Config
 
 
 def build_index(chunks_path: str, cfg: Config = DEFAULT_CONFIG) -> None:
@@ -62,16 +64,16 @@ def build_index(chunks_path: str, cfg: Config = DEFAULT_CONFIG) -> None:
     all_embeddings: list[list[float]] = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
-        embs = model.encode(batch, show_progress_bar=False).tolist()
+        embs = np.asarray(model.encode(batch, show_progress_bar=False)).tolist()
         all_embeddings.extend(embs)
         if (i // batch_size) % 5 == 0:
             print(f"  {min(i + batch_size, len(texts))}/{len(texts)}")
 
     collection.add(
         ids=ids,
-        embeddings=all_embeddings,
+        embeddings=cast("Any", all_embeddings),
         documents=texts,
-        metadatas=metadatas,
+        metadatas=cast("Any", metadatas),
     )
     print(f"Indexed {collection.count()} chunks → {cfg.index_dir}")
 

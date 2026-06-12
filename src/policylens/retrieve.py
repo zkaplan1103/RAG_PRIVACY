@@ -2,12 +2,17 @@
 
 ChromaRetriever: production retriever backed by a persisted Chroma collection.
 FixtureRetriever: fast keyword-overlap retriever for isolated dev/tests.
+PgVectorRetriever: hybrid ANN + FTS retriever backed by pgvector on Postgres.
+
+Use make_retriever(cfg) to get the right retriever for a given Config.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Protocol, TypedDict
+from typing import Any, Protocol, TypedDict, cast
+
+import numpy as np
 
 from .config import Config
 from .ingest import Chunk
@@ -44,7 +49,7 @@ class ChromaRetriever:
         if self._collection.count() == 0:
             return []
 
-        query_emb = self._model.encode([query]).tolist()
+        query_emb = np.asarray(self._model.encode([query])).tolist()
 
         try:
             results = self._collection.query(
@@ -57,23 +62,24 @@ class ChromaRetriever:
             return []
 
         hits: list[RetrievedChunk] = []
-        ids = results.get("ids", [[]])[0]
-        docs = results.get("documents", [[]])[0]
-        metas = results.get("metadatas", [[]])[0]
-        dists = results.get("distances", [[]])[0]
+        ids = (results.get("ids") or [[]])[0]
+        docs = (results.get("documents") or [[]])[0]
+        metas = (results.get("metadatas") or [[]])[0]
+        dists = (results.get("distances") or [[]])[0]
 
         for chunk_id, doc, meta, dist in zip(ids, docs, metas, dists):
             # Chroma cosine distance ∈ [0, 2]; convert to similarity ∈ [-1, 1]
             score = float(1.0 - dist)
+            m = cast("dict[str, Any]", meta)  # chroma metadata values are loosely typed
             chunk = Chunk(
                 chunk_id=chunk_id,
-                policy_id=meta["policy_id"],
-                policy_name=meta["policy_name"],
-                section=meta["section"],
+                policy_id=m["policy_id"],
+                policy_name=m["policy_name"],
+                section=m["section"],
                 text=doc,
-                char_start=int(meta["char_start"]),
-                char_end=int(meta["char_end"]),
-                source_url=meta.get("source_url") or None,
+                char_start=int(m["char_start"]),
+                char_end=int(m["char_end"]),
+                source_url=m.get("source_url") or None,
             )
             hits.append(RetrievedChunk(chunk=chunk, score=score))
 
@@ -109,3 +115,31 @@ class FixtureRetriever:
         scored = [RetrievedChunk(chunk=c, score=_score(c)) for c in hits]
         scored.sort(key=lambda x: x["score"], reverse=True)
         return scored[:k]
+
+
+# ---------------------------------------------------------------------------
+# Factory — returns the correct Retriever for the configured backend.
+# Chroma path is byte-identical to the pre-v2 behaviour; pgvector path
+# reads the DSN from os.environ[cfg.db_url_env].
+# ---------------------------------------------------------------------------
+
+
+def make_retriever(cfg: Config) -> "ChromaRetriever | FixtureRetriever | object":
+    """Construct and return the appropriate Retriever for cfg.retrieval_backend.
+
+    "chroma"   → ChromaRetriever(cfg)       [default; no new env vars needed]
+    "pgvector" → PgVectorRetriever(cfg)     [requires SUPABASE_DB_URL or cfg.db_url_env]
+
+    Any other value raises ValueError.
+    """
+    if cfg.retrieval_backend == "chroma":
+        return ChromaRetriever(cfg)
+    elif cfg.retrieval_backend == "pgvector":
+        from .pgvector import PgVectorRetriever  # local import to avoid hard dep at module level
+
+        return PgVectorRetriever(cfg)
+    else:
+        raise ValueError(
+            f"Unknown retrieval_backend {cfg.retrieval_backend!r}. "
+            "Valid values: 'chroma', 'pgvector'."
+        )

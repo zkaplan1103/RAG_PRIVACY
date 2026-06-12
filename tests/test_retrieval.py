@@ -1,20 +1,20 @@
 """Unit tests for index + retrieval — build from fixture, not full chunks.jsonl."""
 import json
+
 import pytest
-from pathlib import Path
 
 FIXTURE = "tests/fixtures/chunks_sample.jsonl"
 
 
 def _fixture_policy_ids():
     with open(FIXTURE) as f:
-        return list(set(json.loads(l)["policy_id"] for l in f if l.strip()))
+        return list(set(json.loads(line)["policy_id"] for line in f if line.strip()))
 
 
 @pytest.fixture(scope="module")
 def tmp_index(tmp_path_factory):
-    from src.policylens.index import build_index
     from src.policylens.config import Config
+    from src.policylens.index import build_index
 
     idx_dir = str(tmp_path_factory.mktemp("chroma_index"))
     cfg = Config(index_dir=idx_dir)
@@ -64,7 +64,8 @@ def test_retrieval_chunk_schema(tmp_index):
     for h in hits:
         assert isinstance(h["score"], float)
         chunk = h["chunk"]
-        for key in ("chunk_id", "policy_id", "policy_name", "section", "text", "char_start", "char_end"):
+        for key in ("chunk_id", "policy_id", "policy_name", "section",
+                    "text", "char_start", "char_end"):
             assert key in chunk, f"missing key: {key}"
 
 
@@ -77,8 +78,9 @@ def test_no_results_wrong_policy(tmp_index):
 
 def test_cache_skips_reindex(tmp_index):
     """Second build_index call on same dir should skip."""
-    from src.policylens.index import build_index
     import chromadb
+
+    from src.policylens.index import build_index
     build_index(FIXTURE, tmp_index)
     client = chromadb.PersistentClient(path=tmp_index.index_dir)
     col = client.get_collection("policylens")

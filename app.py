@@ -10,7 +10,7 @@ import streamlit as st
 
 from src.policylens.config import DEFAULT_CONFIG
 from src.policylens.generate import Answer, answer
-from src.policylens.retrieve import ChromaRetriever
+from src.policylens.retrieve import make_retriever
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -26,7 +26,10 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 @st.cache_resource
 def get_retriever():
-    return ChromaRetriever(DEFAULT_CONFIG)
+    # make_retriever respects DEFAULT_CONFIG.retrieval_backend ("chroma" by default).
+    # Switch to "pgvector" by setting retrieval_backend in Config and providing
+    # the env var named by Config.db_url_env. The chroma path is byte-identical.
+    return make_retriever(DEFAULT_CONFIG)
 
 # ---------------------------------------------------------------------------
 # Header
@@ -78,19 +81,30 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
     )
     st.stop()
 
-# Check that the index has been built
+# Check that the retriever can be constructed (index built / DB reachable).
 try:
     retriever = get_retriever()
-    import chromadb
-    _client = chromadb.PersistentClient(path=DEFAULT_CONFIG.index_dir)
-    _col = _client.get_collection("policylens")
-    if _col.count() == 0:
-        st.error(
-            "**Index not built yet.** Run `make index` (or `uv run python -m policylens.index build`) first."
-        )
-        st.stop()
+    if DEFAULT_CONFIG.retrieval_backend == "chroma":
+        # For Chroma: confirm the collection has been indexed.
+        import chromadb  # type: ignore[import-untyped]
+
+        _client = chromadb.PersistentClient(path=DEFAULT_CONFIG.index_dir)
+        _col = _client.get_collection("policylens")
+        if _col.count() == 0:
+            st.error(
+                "**Index not built yet.** "
+                "Run `make index` (or `uv run python -m policylens.index build`) first."
+            )
+            st.stop()
 except Exception as e:
-    st.error(f"**Could not load index:** {e}  \nRun `make index` to build it.")
+    backend = DEFAULT_CONFIG.retrieval_backend
+    if backend == "pgvector":
+        st.error(
+            f"**Could not connect to pgvector:** {e}  \n"
+            f"Ensure {DEFAULT_CONFIG.db_url_env} is set and the DB is reachable."
+        )
+    else:
+        st.error(f"**Could not load index:** {e}  \nRun `make index` to build it.")
     st.stop()
 
 # ---------------------------------------------------------------------------

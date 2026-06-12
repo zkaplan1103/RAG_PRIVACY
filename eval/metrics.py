@@ -5,7 +5,8 @@ Interface contract:
 
 To run an eval:
   1. Load golden items:   items = load_golden("data/raw/privacyqa/data/policy_test_data.csv")
-  2. Run the RAG system:  answers = [answer(g["query"], g["policy_id"], retriever, cfg) for g in items]
+  2. Run the RAG system:
+       answers = [answer(g["query"], g["policy_id"], retriever, cfg) for g in items]
   3. Score:               result = evaluate(items, answers)
 
 Metrics Project C should implement:
@@ -18,8 +19,9 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from .golden import GoldenItem
 from src.policylens.generate import Answer
+
+from .golden import GoldenItem
 
 
 class EvalResult(TypedDict):
