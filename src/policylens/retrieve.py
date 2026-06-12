@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Protocol, TypedDict
+from typing import Any, Protocol, TypedDict, cast
+
+import numpy as np
 
 from .config import Config
 from .ingest import Chunk
@@ -44,7 +46,7 @@ class ChromaRetriever:
         if self._collection.count() == 0:
             return []
 
-        query_emb = self._model.encode([query]).tolist()
+        query_emb = np.asarray(self._model.encode([query])).tolist()
 
         try:
             results = self._collection.query(
@@ -57,23 +59,24 @@ class ChromaRetriever:
             return []
 
         hits: list[RetrievedChunk] = []
-        ids = results.get("ids", [[]])[0]
-        docs = results.get("documents", [[]])[0]
-        metas = results.get("metadatas", [[]])[0]
-        dists = results.get("distances", [[]])[0]
+        ids = (results.get("ids") or [[]])[0]
+        docs = (results.get("documents") or [[]])[0]
+        metas = (results.get("metadatas") or [[]])[0]
+        dists = (results.get("distances") or [[]])[0]
 
         for chunk_id, doc, meta, dist in zip(ids, docs, metas, dists):
             # Chroma cosine distance ∈ [0, 2]; convert to similarity ∈ [-1, 1]
             score = float(1.0 - dist)
+            m = cast("dict[str, Any]", meta)  # chroma metadata values are loosely typed
             chunk = Chunk(
                 chunk_id=chunk_id,
-                policy_id=meta["policy_id"],
-                policy_name=meta["policy_name"],
-                section=meta["section"],
+                policy_id=m["policy_id"],
+                policy_name=m["policy_name"],
+                section=m["section"],
                 text=doc,
-                char_start=int(meta["char_start"]),
-                char_end=int(meta["char_end"]),
-                source_url=meta.get("source_url") or None,
+                char_start=int(m["char_start"]),
+                char_end=int(m["char_end"]),
+                source_url=m.get("source_url") or None,
             )
             hits.append(RetrievedChunk(chunk=chunk, score=score))
 

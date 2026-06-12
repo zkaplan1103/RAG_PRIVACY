@@ -2,7 +2,6 @@
 import json
 from pathlib import Path
 
-
 FIXTURE_PATH = Path("tests/fixtures/chunks_sample.jsonl")
 REQUIRED_CHUNK_KEYS = {
     "chunk_id", "policy_id", "policy_name", "section",
@@ -15,25 +14,25 @@ def test_fixture_exists():
 
 
 def test_fixture_has_ten_rows():
-    rows = [json.loads(l) for l in FIXTURE_PATH.read_text().splitlines() if l.strip()]
+    rows = [json.loads(line) for line in FIXTURE_PATH.read_text().splitlines() if line.strip()]
     assert len(rows) == 10, f"Expected 10 fixture rows, got {len(rows)}"
 
 
 def test_fixture_chunk_schema():
-    rows = [json.loads(l) for l in FIXTURE_PATH.read_text().splitlines() if l.strip()]
+    rows = [json.loads(line) for line in FIXTURE_PATH.read_text().splitlines() if line.strip()]
     for row in rows:
         missing = REQUIRED_CHUNK_KEYS - set(row.keys())
         assert not missing, f"Chunk {row.get('chunk_id')} missing keys: {missing}"
 
 
 def test_fixture_chunk_ids_unique():
-    rows = [json.loads(l) for l in FIXTURE_PATH.read_text().splitlines() if l.strip()]
+    rows = [json.loads(line) for line in FIXTURE_PATH.read_text().splitlines() if line.strip()]
     ids = [r["chunk_id"] for r in rows]
     assert len(ids) == len(set(ids)), "Duplicate chunk_ids in fixture"
 
 
 def test_config_importable():
-    from src.policylens.config import Config, DEFAULT_CONFIG  # noqa: F401
+    from src.policylens.config import DEFAULT_CONFIG, Config  # noqa: F401
     cfg = Config()
     assert cfg.embed_model == "BAAI/bge-small-en-v1.5"
     assert cfg.score_floor == 0.30

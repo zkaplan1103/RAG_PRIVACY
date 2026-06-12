@@ -1,4 +1,9 @@
-# PolicyLens — Build Plan (for Claude Code)
+# PolicyLens — Build Plan (v1 — SHIPPED, historical)
+
+> **Status 2026-06-11:** the demo described here is complete (Phases 0–3 done).
+> The project is now being upgraded to a production system — see
+> `docs/UPGRADE_PLAN.md` for the current plan and `.claude/agents/` for the v2
+> agent roster. This file is kept as the v1 record; don't execute it again.
 
 > A RAG system that answers plain-English questions about real privacy policies
 > and **cites the exact clause** it used. Built on the OPP-115 / PrivacyQA /

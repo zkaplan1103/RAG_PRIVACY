@@ -34,15 +34,17 @@ SMOKE_QUESTIONS_REAL = [
 def run_smoke(use_real: bool = False) -> None:
     if use_real:
         from src.policylens.config import DEFAULT_CONFIG
-        from src.policylens.retrieve import ChromaRetriever
         from src.policylens.generate import answer
+        from src.policylens.retrieve import ChromaRetriever
 
         retriever = ChromaRetriever(DEFAULT_CONFIG)
-        ask = lambda q, pid: answer(q, pid, retriever, DEFAULT_CONFIG)
+        def ask(q, pid):
+            return answer(q, pid, retriever, DEFAULT_CONFIG)
         questions = SMOKE_QUESTIONS_REAL
     else:
         from src.policylens.generate import canned_answer
-        ask = lambda q, pid: canned_answer(policy_id=pid)
+        def ask(q, pid):
+            return canned_answer(policy_id=pid)
         questions = SMOKE_QUESTIONS_STUB
 
     passed = 0

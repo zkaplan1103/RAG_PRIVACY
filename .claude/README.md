@@ -1,35 +1,27 @@
-# PolicyLens — Claude Code starter kit
+# PolicyLens — Claude Code orchestration layer (v2)
 
-This folder is the **orchestration layer** for building the privacy-policy RAG
-project with Claude Code. It does not contain the app code — Claude Code writes
-that. It contains the plan, the rules, the interface contracts, the subagents,
-and the tagged-memory scaffold that make the build fast and token-cheap.
+This folder is the orchestration layer for PolicyLens. The v1 demo (Chroma +
+Streamlit, clause-level citations, abstention) shipped; the project is now
+being upgraded to a production-grade, measured system.
 
-## What's here
+## Read in this order
 ```
-BUILD_PLAN.md          ← read this first: phases, parallelization, kickoff prompts
-CLAUDE.md              ← loaded by Claude Code every session (the rules)
-docs/CONTRACTS.md      ← frozen interfaces; the seam that lets agents run in parallel
-docs/memory/           ← tag-based memory (INDEX + append-only dated notes)
-.claude/agents/        ← 4 builder subagents (data, index, rag, ui)
+CLAUDE.md              ← loaded every session: rules, constraints, agent roster
+docs/UPGRADE_PLAN.md   ← current plan: phases P1–P7, dependencies, what's flagged
+docs/CONTRACTS.md      ← frozen interfaces (Part I = v1 demo, Part II = v2 upgrade)
+docs/memory/INDEX.md   ← tag-based memory protocol
+agents/                ← v2 subagents: eval, vector, observability, infra, docs
 ```
 
-## How to use
-1. Create an empty git repo and copy this whole folder's contents into its root
-   (so `.claude/`, `CLAUDE.md`, `BUILD_PLAN.md`, `docs/` sit at the top level).
-2. Open Claude Code in that repo.
-3. Paste the Phase 0 kickoff prompt from `BUILD_PLAN.md` §9.
-4. After Phase 0 looks right, paste the Phase 1 dispatch prompt.
+## v2 in one paragraph
+Versioned golden eval set (150–200 Q/A) scored by Ragas + promptfoo in GitHub
+Actions with a faithfulness regression gate; LangFuse tracing for cost/latency;
+Chroma → pgvector on Supabase with hybrid search (RRF) + local cross-encoder
+reranking behind the unchanged `Retriever` protocol; deployed as a Lambda
+container behind API Gateway via Terraform. No accounts or cloud resources are
+created by Claude — everything reads env vars (CONTRACTS §11) and degrades to
+a no-op/local path without them; user-run steps land in `SETUP_TASKS.md`.
 
-## The three ideas that make this efficient
-- **Contract-first** (`docs/CONTRACTS.md`): freeze the schemas, then four agents
-  build against interfaces + stubs in parallel instead of blocking each other.
-- **Delegate to subagents**: only their final report returns to the main
-  context — the biggest token lever in Claude Code.
-- **Tag-based memory**: agents read only the memory file matching their tag, so
-  context stays small as the project grows.
-
-## Pattern source
-Subagent frontmatter and memory-scope conventions follow current Claude Code
-docs and the community reference repo `shanraisshan/claude-code-best-practice`.
-Requires Claude Code ≥ v2.1.33 for per-agent `memory:` scopes (see BUILD_PLAN §10).
+## Historical
+`BUILD_PLAN.md` (v1 plan, shipped) and the root-level `data/index/rag/ui-engineer.md`
+prompts are retired v1 artifacts, kept for the record.

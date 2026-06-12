@@ -99,3 +99,153 @@ class GoldenItem(TypedDict):
 def load_golden(path: str) -> list[GoldenItem]: ...   # maps PrivacyQA/PolicyQA onto our schema
 # eval/ package exists with this signature documented; metrics NOT implemented here.
 ```
+
+---
+---
+
+# Part II — Production upgrade contracts (v2, frozen 2026-06-11)
+
+Additive only: nothing in §1–§5 changes. `Retriever`, `Chunk`, `Citation`, and
+`Answer` are load-bearing for the upgrade and stay frozen. Change protocol is
+unchanged: edit here first, log in `00-decisions.md`, then code.
+
+## 6. Config v2  (extends §4 — new fields, backward-compatible defaults)
+
+```python
+@dataclass
+class Config:
+    # --- v1 fields unchanged (embed_*, gen_*, top_k, index_dir, score_floor) ---
+    retrieval_backend: str = "chroma"     # "chroma" | "pgvector"
+    db_url_env: str = "SUPABASE_DB_URL"   # env var NAME holding the Postgres DSN (never the DSN itself)
+    hybrid_rrf_k: int = 60                # RRF constant for fusing vector + FTS ranks
+    fts_candidates: int = 20              # candidates pulled from each leg before fusion
+    rerank_enabled: bool = True           # pgvector path only; chroma path ignores
+    rerank_model: str = "BAAI/bge-reranker-base"   # local cross-encoder
+    rerank_top_n: int = 5                 # final k after rerank (== top_k by default)
+    judge_model: str = "claude-opus-4-8"  # Ragas judge; env override EVAL_JUDGE_MODEL
+    langfuse_enabled: bool = True         # auto-disables if LANGFUSE_* env vars absent
+```
+
+Rule: every default must keep the v1 demo working with zero new env vars set.
+
+## 7. pgvector schema + hybrid retrieval  (vector-engineer)
+
+One table, owned by the migration script (`src/policylens/pgvector.py` + `infra/sql/001_init.sql`):
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE TABLE chunks (
+    chunk_id    text PRIMARY KEY,
+    policy_id   text NOT NULL,
+    policy_name text NOT NULL,
+    section     text NOT NULL,
+    text        text NOT NULL,
+    char_start  int  NOT NULL,
+    char_end    int  NOT NULL,
+    source_url  text,
+    embedding   vector(384) NOT NULL,             -- bge-small-en-v1.5
+    tsv         tsvector GENERATED ALWAYS AS (to_tsvector('english', text)) STORED
+);
+CREATE INDEX chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX chunks_tsv_idx       ON chunks USING gin  (tsv);
+CREATE INDEX chunks_policy_idx    ON chunks (policy_id);
+```
+
+```python
+class PgVectorRetriever:  # implements the frozen Retriever protocol (§2) exactly
+    def retrieve(self, query: str, policy_id: str, k: int = 5) -> list[RetrievedChunk]: ...
+```
+
+Rules: both legs (cosine ANN + FTS) are scoped to `policy_id`; fused via RRF
+(`1/(rrf_k + rank)`); if `rerank_enabled`, cross-encoder rescores the fused
+candidates and the **reranker score becomes `RetrievedChunk.score`, rescaled to
+[0, 1]** so the §3 `score_floor` abstention semantics keep working. Sorted desc,
+at most `k`. Backfill script reads `chunks.jsonl` (§1), reuses cached
+embeddings where possible.
+
+## 8. Observability contract  (observability-engineer)
+
+`src/policylens/observability.py`. One **trace per `answer()` call**, three spans:
+
+| Span | Captures |
+|---|---|
+| `retrieve` | backend, k, candidate count, top scores, policy_id |
+| `rerank`   | model, in/out counts, score deltas (skipped span if disabled) |
+| `generate` | model, input/output tokens, cost (from usage), abstention path taken |
+
+Trace metadata: `policy_id`, `gen_model`, `score_floor`, `top_k`, `answerable`,
+`n_citations`, `latency_ms`, `app_version` (git sha if available).
+
+Rules: reads `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST`;
+if any is absent → **silent no-op** (zero network calls, zero log spam, demo
+unaffected). Never traces raw policy text beyond the chunks already in the
+prompt. `generate.py` and `api/handler.py` call the wrapper; they never import
+the langfuse SDK directly.
+
+## 9. Eval v2  (eval-engineer) — golden set, Ragas, promptfoo, gate
+
+**Golden set:** `eval/golden/golden_v1.jsonl` + `eval/golden/MANIFEST.md`
+(version, item count, provenance per source, license notes, curation rules).
+Immutable once tagged — edits produce `golden_v2.jsonl`. Target 150–200 items,
+including ≥ 15% expected-unanswerable.
+
+```python
+class GoldenItemV2(TypedDict):      # supersedes §5 GoldenItem for the v1 set file
+    id: str                          # "gv1-0001" — stable across versions
+    query: str
+    policy_id: str                   # must exist in the OPP-115 index
+    expected_answerable: bool
+    gold_chunk_ids: list[str]        # may be empty only when expected_answerable is False
+    reference_answer: str            # ground truth for Ragas ("" if unanswerable)
+
+class RagasRecord(TypedDict):        # produced by the harness per golden item
+    question: str
+    answer: str                      # Answer.text from the pipeline
+    contexts: list[str]              # retrieved chunk texts handed to the LLM
+    ground_truth: str                # reference_answer
+```
+
+**Metrics:** Ragas `faithfulness`, `answer_relevancy`, `context_precision`,
+`context_recall`, judged by `Config.judge_model`. Plus the §5 house metrics
+(abstention accuracy, citation precision/recall) implemented in `eval/metrics.py`
+(replaces the NotImplementedError stub — same `evaluate()` signature).
+
+**promptfoo:** `eval/promptfoo/promptfooconfig.yaml` — provider wraps our
+`answer()` via a python script provider; assertions mirror abstention +
+citation rules on a fixed subset.
+
+**Regression gate (CI):** mean faithfulness ≥ `FAITHFULNESS_THRESHOLD`
+(default **0.80**, set in `eval/thresholds.yaml`, recalibrated after the first
+baseline run) → otherwise the workflow fails. Abstention accuracy on
+expected-unanswerable items ≥ 0.90 is a second hard gate.
+
+## 10. API contract  (infra-engineer)
+
+`POST /ask` (API Gateway → Lambda, `api/handler.py`):
+
+```jsonc
+// request
+{ "query": "string (1–500 chars)", "policy_id": "string", "top_k": 5 }   // top_k optional
+// 200 response — Answer (§3) plus envelope
+{ "answer": { /* Answer schema, unchanged */ },
+  "request_id": "uuid", "latency_ms": 1234, "version": "git-sha" }
+// 400 invalid body · 404 unknown policy_id · 500 { "error": "...", "request_id": "..." }
+```
+
+Rules: handler is a thin adapter — all logic stays in `policylens.*`; the same
+`answer()` serves Streamlit and Lambda. Response `answer` validates against §3
+(structured output guarantees preserved). No streaming in v2.
+
+## 11. Env var registry (single source of truth — SETUP_TASKS.md documents each)
+
+| Var | Used by | Required for |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | generate, eval | generation + Ragas judge |
+| `SUPABASE_DB_URL` | PgVectorRetriever, migration | pgvector path only |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` | observability | tracing only (absent → no-op) |
+| `EVAL_JUDGE_MODEL` | eval | optional override of `Config.judge_model` |
+| `FAITHFULNESS_THRESHOLD` | CI gate | optional override of thresholds.yaml |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` | terraform, image push | deploy only (user-run) |
+
+GitHub Actions mirrors these as repo secrets with identical names. Code never
+hardcodes a credential or a DSN; Terraform takes them as variables, never state.

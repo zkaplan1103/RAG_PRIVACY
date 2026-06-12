@@ -1,19 +1,23 @@
 """Unit tests for generate.py — mock Anthropic client, no API key needed."""
 from unittest.mock import MagicMock, patch
 
-from src.policylens.generate import (
-    Answer, Citation, ABSTENTION_TEXT, answer, canned_answer, _short_quote,
-)
 from src.policylens.config import Config
-from src.policylens.retrieve import RetrievedChunk
+from src.policylens.generate import (
+    ABSTENTION_TEXT,
+    _short_quote,
+    answer,
+    canned_answer,
+)
 from src.policylens.ingest import Chunk
-
+from src.policylens.retrieve import RetrievedChunk
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_chunk(chunk_id: str, text: str, score: float, section: str = "Data Sharing") -> RetrievedChunk:
+def _make_chunk(
+    chunk_id: str, text: str, score: float, section: str = "Data Sharing"
+) -> RetrievedChunk:
     return RetrievedChunk(
         chunk=Chunk(
             chunk_id=chunk_id,
@@ -89,12 +93,16 @@ def test_abstain_model_says_unanswerable():
 def test_answerable_has_citations():
     cfg = Config(score_floor=0.30)
     hits = [
-        _make_chunk("p::data_sharing::c000", "We share data with advertising partners.", score=0.85),
+        _make_chunk("p::data_sharing::c000", "We share data with advertising partners.",
+                    score=0.85),
         _make_chunk("p::user_choice::c000", "You can opt out in account settings.", score=0.72,
                     section="User Choice/Control"),
     ]
     retriever = FakeRetriever(hits)
-    with _mock_anthropic("According to the policy, data is shared with advertising partners [1]. You can opt out [2]."):
+    with _mock_anthropic(
+        "According to the policy, data is shared with advertising partners [1]. "
+        "You can opt out [2]."
+    ):
         result = answer("Does this app share data?", "test_policy", retriever, cfg)
     assert result["answerable"] is True
     assert len(result["citations"]) >= 1
@@ -119,7 +127,8 @@ def test_citations_reference_real_chunk_ids():
 
 def test_quote_max_25_words():
     cfg = Config(score_floor=0.30)
-    hits = [_make_chunk("p::sec::c000", "We collect " + " ".join([f"word{i}" for i in range(50)]) + ".", score=0.80)]
+    long_text = "We collect " + " ".join([f"word{i}" for i in range(50)]) + "."
+    hits = [_make_chunk("p::sec::c000", long_text, score=0.80)]
     retriever = FakeRetriever(hits)
     with _mock_anthropic("The policy collects data [1]."):
         result = answer("data collection", "test_policy", retriever, cfg)

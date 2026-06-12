@@ -9,8 +9,12 @@ import os
 import streamlit as st
 
 from src.policylens.config import DEFAULT_CONFIG
-from src.policylens.generate import Answer, answer
+from src.policylens.generate import Answer, answer, canned_answer
 from src.policylens.retrieve import ChromaRetriever
+
+# Demo mode: no API key → canned sample output, no index required.
+# Set ANTHROPIC_API_KEY to query real policies.
+DEMO_MODE = not os.environ.get("ANTHROPIC_API_KEY")
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -69,29 +73,29 @@ with st.sidebar:
     )
 
 # ---------------------------------------------------------------------------
-# API key check
+# API key / index check (skipped in demo mode)
 # ---------------------------------------------------------------------------
-if not os.environ.get("ANTHROPIC_API_KEY"):
-    st.error(
-        "**ANTHROPIC_API_KEY not set.** "
-        "Export it in your shell before running: `export ANTHROPIC_API_KEY=sk-...`"
+retriever = None
+if DEMO_MODE:
+    st.info(
+        "**Demo mode** — showing sample output. "
+        "Set `ANTHROPIC_API_KEY` to query real policies."
     )
-    st.stop()
-
-# Check that the index has been built
-try:
-    retriever = get_retriever()
-    import chromadb
-    _client = chromadb.PersistentClient(path=DEFAULT_CONFIG.index_dir)
-    _col = _client.get_collection("policylens")
-    if _col.count() == 0:
-        st.error(
-            "**Index not built yet.** Run `make index` (or `uv run python -m policylens.index build`) first."
-        )
+else:
+    try:
+        retriever = get_retriever()
+        import chromadb
+        _client = chromadb.PersistentClient(path=DEFAULT_CONFIG.index_dir)
+        _col = _client.get_collection("policylens")
+        if _col.count() == 0:
+            st.error(
+                "**Index not built yet.** Run `make index` "
+                "(or `uv run python -m policylens.index build`) first."
+            )
+            st.stop()
+    except Exception as e:
+        st.error(f"**Could not load index:** {e}  \nRun `make index` to build it.")
         st.stop()
-except Exception as e:
-    st.error(f"**Could not load index:** {e}  \nRun `make index` to build it.")
-    st.stop()
 
 # ---------------------------------------------------------------------------
 # Query input
@@ -112,7 +116,7 @@ query = st.text_input(
     "Your question",
     value=st.session_state.get("query", ""),
     placeholder="Does this app share my data with advertisers?",
-)
+) or ""
 
 ask_clicked = st.button("Ask", type="primary", disabled=not query.strip())
 
@@ -121,7 +125,10 @@ ask_clicked = st.button("Ask", type="primary", disabled=not query.strip())
 # ---------------------------------------------------------------------------
 if ask_clicked and query.strip():
     with st.spinner("Retrieving and generating…"):
-        result: Answer = answer(query, policy_id, retriever, DEFAULT_CONFIG)
+        if retriever is None:  # demo mode
+            result: Answer = canned_answer(policy_id=policy_id)
+        else:
+            result = answer(query, policy_id, retriever, DEFAULT_CONFIG)
 
     st.divider()
 

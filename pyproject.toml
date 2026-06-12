@@ -39,6 +39,7 @@ select = ["E", "F", "I"]
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
+exclude = ["data", ".venv", "**/__pycache__"]
 venvPath = "."
 venv = ".venv"
 

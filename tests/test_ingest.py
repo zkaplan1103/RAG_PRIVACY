@@ -3,11 +3,14 @@ import json
 from pathlib import Path
 
 FIXTURE = Path("tests/fixtures/chunks_sample.jsonl")
-REQUIRED_KEYS = {"chunk_id", "policy_id", "policy_name", "section", "text", "char_start", "char_end", "source_url"}
+REQUIRED_KEYS = {
+    "chunk_id", "policy_id", "policy_name", "section",
+    "text", "char_start", "char_end", "source_url",
+}
 
 
 def _load_fixture():
-    return [json.loads(l) for l in FIXTURE.read_text().splitlines() if l.strip()]
+    return [json.loads(line) for line in FIXTURE.read_text().splitlines() if line.strip()]
 
 
 def test_fixture_exists():
@@ -28,7 +31,8 @@ def test_chunk_ids_unique():
 def test_char_offsets():
     for chunk in _load_fixture():
         assert chunk["char_start"] >= 0, f"{chunk['chunk_id']} negative char_start"
-        assert chunk["char_end"] > chunk["char_start"], f"{chunk['chunk_id']} char_end <= char_start"
+        msg = f"{chunk['chunk_id']} char_end <= char_start"
+        assert chunk["char_end"] > chunk["char_start"], msg
 
 
 def test_no_html_in_text():

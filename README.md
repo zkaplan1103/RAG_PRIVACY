@@ -99,6 +99,21 @@ Approximately **$0.001–0.002 per question** at current Haiku pricing.
 
 ---
 
+## Production upgrade (in progress)
+
+The demo above works today. The project is currently being upgraded into a
+production-grade, *measured* system — plan in [docs/UPGRADE_PLAN.md](docs/UPGRADE_PLAN.md),
+interfaces in [docs/CONTRACTS.md](docs/CONTRACTS.md) (Part II):
+
+- **Evaluation:** a versioned golden set (150–200 Q/A derived from PrivacyQA), scored with Ragas (faithfulness, answer relevance, context precision/recall) and promptfoo, run in CI with a regression gate that fails the build if faithfulness drops below threshold.
+- **Observability:** LangFuse tracing of every answer — retrieval, reranking, and generation spans with cost and latency.
+- **Retrieval:** Chroma → pgvector on Supabase, with hybrid search (vector + full-text, RRF fusion) and a local cross-encoder reranker — behind the same `Retriever` interface, so abstention and citations are unchanged.
+- **Deployment:** AWS Lambda (container) + API Gateway, provisioned via Terraform.
+
+Until that lands, everything in this README describes the current, working demo.
+
+---
+
 ## Data sources & licenses
 
 | Dataset | Source | License |

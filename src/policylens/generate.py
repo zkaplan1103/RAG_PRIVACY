@@ -10,7 +10,7 @@ from typing import TypedDict
 import anthropic
 
 from .config import Config
-from .retrieve import Retriever, RetrievedChunk
+from .retrieve import RetrievedChunk, Retriever
 
 ABSTENTION_TEXT = "The policy doesn't address this question."
 
@@ -61,7 +61,11 @@ def _short_quote(text: str, query: str, max_words: int = 25) -> str:
     # Find the sentence most relevant to the query
     query_words = set(query.lower().split())
     sentences = re.split(r"(?<=[.!?])\s+", text)
-    best = max(sentences, key=lambda s: len(query_words & set(s.lower().split())), default=sentences[0])
+    best = max(
+        sentences,
+        key=lambda s: len(query_words & set(s.lower().split())),
+        default=sentences[0],
+    )
     words = best.split()
     if len(words) <= max_words:
         return best
@@ -152,7 +156,7 @@ def answer(
         messages=[{"role": "user", "content": user_msg}],
     )
 
-    raw = response.content[0].text.strip()
+    raw = next((b.text for b in response.content if b.type == "text"), "").strip()
 
     # Post-LLM abstention
     if raw.upper().startswith("UNANSWERABLE") or raw.upper() == "UNANSWERABLE":
