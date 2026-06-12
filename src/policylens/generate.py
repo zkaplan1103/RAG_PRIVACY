@@ -1,16 +1,27 @@
 """Generation layer: answer() with citations and abstention.
 
 Answer schema — see docs/CONTRACTS.md §3.
+LangFuse tracing — see docs/CONTRACTS.md §8 and src/policylens/observability.py.
 """
 from __future__ import annotations
 
 import re
+import time
 from typing import TypedDict
 
 import anthropic
 
 from .config import Config
-from .retrieve import Retriever, RetrievedChunk
+from .observability import RerankSpanData as _RerankSpanData  # re-exported for callers
+from .observability import (
+    TraceContext,
+    trace_answer,
+    update_trace_answer_metadata,
+)
+from .retrieve import RetrievedChunk, Retriever
+
+# Re-export so api/handler.py can use without importing langfuse directly
+__all__ = ["answer", "canned_answer", "Citation", "Answer", "TraceContext", "_RerankSpanData"]
 
 ABSTENTION_TEXT = "The policy doesn't address this question."
 
@@ -61,7 +72,11 @@ def _short_quote(text: str, query: str, max_words: int = 25) -> str:
     # Find the sentence most relevant to the query
     query_words = set(query.lower().split())
     sentences = re.split(r"(?<=[.!?])\s+", text)
-    best = max(sentences, key=lambda s: len(query_words & set(s.lower().split())), default=sentences[0])
+    best = max(
+        sentences,
+        key=lambda s: len(query_words & set(s.lower().split())),
+        default=sentences[0],
+    )
     words = best.split()
     if len(words) <= max_words:
         return best
@@ -115,19 +130,61 @@ def answer(
 
     Abstains (answerable=False) when no chunk scores above cfg.score_floor
     or when the LLM determines the context doesn't support an answer.
+
+    Signature is frozen — see docs/CONTRACTS.md §3.
+    Tracing is transparent: failures are swallowed so the answer is always returned.
     """
+    with trace_answer(query=query, policy_id=policy_id, cfg=cfg) as _obs:
+        return _answer_impl(query, policy_id, retriever, cfg, _obs)
+
+
+def _answer_impl(
+    query: str,
+    policy_id: str,
+    retriever: Retriever,
+    cfg: Config,
+    obs: TraceContext,
+) -> Answer:
+    """Core answer logic; obs is a no-op TraceContext when tracing is disabled."""
+    # --- Retrieval ---
+    t0 = time.monotonic()
     hits = retriever.retrieve(query, policy_id, k=cfg.top_k)
+    retrieve_ms = (time.monotonic() - t0) * 1000
+
+    try:
+        obs.record_retrieve(
+            backend=cfg.retrieval_backend,
+            k=cfg.top_k,
+            candidate_count=len(hits),
+            top_scores=[h["score"] for h in hits[:5]],
+            policy_id=policy_id,
+            latency_ms=retrieve_ms,
+        )
+    except Exception:
+        pass  # tracing must never break the answer path
 
     # Pre-LLM abstention: no hits or all below score floor
     good_hits = [h for h in hits if h["score"] >= cfg.score_floor]
     if not good_hits:
-        return Answer(
+        result = Answer(
             answerable=False,
             text=ABSTENTION_TEXT,
             citations=[],
             policy_id=policy_id,
             model=cfg.gen_model,
         )
+        try:
+            obs.record_generate(
+                model=cfg.gen_model,
+                input_tokens=0,
+                output_tokens=0,
+                abstention_path="score_floor",
+                latency_ms=0.0,
+            )
+            update_trace_answer_metadata(obs, answerable=False, n_citations=0)
+        except Exception:
+            pass
+        return result
 
     # Build numbered context block
     context_lines = []
@@ -144,6 +201,8 @@ def answer(
         context=context,
     )
 
+    # --- Generation ---
+    t1 = time.monotonic()
     client = anthropic.Anthropic()
     response = client.messages.create(
         model=cfg.gen_model,
@@ -151,20 +210,48 @@ def answer(
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )
+    gen_ms = (time.monotonic() - t1) * 1000
 
-    raw = response.content[0].text.strip()
+    first_block = response.content[0]
+    raw = first_block.text.strip() if hasattr(first_block, "text") else ""  # type: ignore[union-attr]
+    input_tokens = response.usage.input_tokens if response.usage else 0
+    output_tokens = response.usage.output_tokens if response.usage else 0
 
     # Post-LLM abstention
     if raw.upper().startswith("UNANSWERABLE") or raw.upper() == "UNANSWERABLE":
-        return Answer(
+        result = Answer(
             answerable=False,
             text=ABSTENTION_TEXT,
             citations=[],
             policy_id=policy_id,
             model=cfg.gen_model,
         )
+        try:
+            obs.record_generate(
+                model=cfg.gen_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                abstention_path="llm_unanswerable",
+                latency_ms=gen_ms,
+            )
+            update_trace_answer_metadata(obs, answerable=False, n_citations=0)
+        except Exception:
+            pass
+        return result
 
     citations = _build_citations(raw, good_hits, query)
+    try:
+        obs.record_generate(
+            model=cfg.gen_model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            abstention_path="none",
+            latency_ms=gen_ms,
+        )
+        update_trace_answer_metadata(obs, answerable=True, n_citations=len(citations))
+    except Exception:
+        pass
+
     return Answer(
         answerable=True,
         text=raw,

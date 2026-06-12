@@ -17,3 +17,4 @@ Format: `YYYY-MM-DD | agent | decision`
 2026-06-01 | rag-engineer | Two abstention paths: score_floor pre-LLM + UNANSWERABLE post-LLM. Citations from [N] markers in answer text.
 2026-06-01 | ui-engineer | Sidebar policy dropdown (KNOWN_POLICIES dict). Phase 2 swap point marked with comment in app.py.
 2026-06-01 | orchestrator | Phase 3 complete: load_golden() implemented for PrivacyQA (400 test items, 366 answerable / 34 unanswerable). eval/metrics.py interface stub documented. README written for non-technical reader.
+2026-06-12 | observability-engineer | P3 complete: observability.py LangFuse wrapper (trace_answer CM + retrieve/rerank/generate spans); langfuse>=2.0.0,<3.0.0 added to deps; Config v2 fields added; strict no-op without keys; 27 tests green; rerank span hook defined for PgVectorRetriever.
