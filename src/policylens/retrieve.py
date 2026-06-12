@@ -2,6 +2,9 @@
 
 ChromaRetriever: production retriever backed by a persisted Chroma collection.
 FixtureRetriever: fast keyword-overlap retriever for isolated dev/tests.
+PgVectorRetriever: hybrid ANN + FTS retriever backed by pgvector on Postgres.
+
+Use make_retriever(cfg) to get the right retriever for a given Config.
 """
 from __future__ import annotations
 
@@ -112,3 +115,31 @@ class FixtureRetriever:
         scored = [RetrievedChunk(chunk=c, score=_score(c)) for c in hits]
         scored.sort(key=lambda x: x["score"], reverse=True)
         return scored[:k]
+
+
+# ---------------------------------------------------------------------------
+# Factory — returns the correct Retriever for the configured backend.
+# Chroma path is byte-identical to the pre-v2 behaviour; pgvector path
+# reads the DSN from os.environ[cfg.db_url_env].
+# ---------------------------------------------------------------------------
+
+
+def make_retriever(cfg: Config) -> "ChromaRetriever | FixtureRetriever | object":
+    """Construct and return the appropriate Retriever for cfg.retrieval_backend.
+
+    "chroma"   → ChromaRetriever(cfg)       [default; no new env vars needed]
+    "pgvector" → PgVectorRetriever(cfg)     [requires SUPABASE_DB_URL or cfg.db_url_env]
+
+    Any other value raises ValueError.
+    """
+    if cfg.retrieval_backend == "chroma":
+        return ChromaRetriever(cfg)
+    elif cfg.retrieval_backend == "pgvector":
+        from .pgvector import PgVectorRetriever  # local import to avoid hard dep at module level
+
+        return PgVectorRetriever(cfg)
+    else:
+        raise ValueError(
+            f"Unknown retrieval_backend {cfg.retrieval_backend!r}. "
+            "Valid values: 'chroma', 'pgvector'."
+        )

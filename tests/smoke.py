@@ -35,16 +35,20 @@ def run_smoke(use_real: bool = False) -> None:
     if use_real:
         from src.policylens.config import DEFAULT_CONFIG
         from src.policylens.generate import answer
-        from src.policylens.retrieve import ChromaRetriever
+        from src.policylens.retrieve import make_retriever
 
-        retriever = ChromaRetriever(DEFAULT_CONFIG)
-        def ask(q, pid):
+        retriever = make_retriever(DEFAULT_CONFIG)
+
+        def ask(q: str, pid: str) -> object:
             return answer(q, pid, retriever, DEFAULT_CONFIG)
+
         questions = SMOKE_QUESTIONS_REAL
     else:
         from src.policylens.generate import canned_answer
-        def ask(q, pid):
+
+        def ask(q: str, pid: str) -> object:  # type: ignore[misc]
             return canned_answer(policy_id=pid)
+
         questions = SMOKE_QUESTIONS_STUB
 
     passed = 0
