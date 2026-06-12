@@ -1,0 +1,241 @@
+# promptfoo configuration for PolicyLens
+# Mirrors CONTRACTS.md §9: abstention + citation contract rules
+#
+# Usage (requires promptfoo CLI):
+#   npx promptfoo eval --config eval/promptfoo/promptfooconfig.yaml
+#
+# The python provider wraps answer(); assertions verify the contract invariants
+# on a fixed subset of the golden set.
+
+description: "PolicyLens contract assertions — abstention + citation rules"
+
+# Provider: Python script wrapper around answer()
+providers:
+  - id: "python:eval/promptfoo/provider.py"
+    label: "policylens-rag"
+
+# Prompt template: passes query|||policy_id to the provider
+prompts:
+  - "{{query}}|||{{policy_id}}"
+
+# Fixed test cases — a stable subset covering key contract assertions.
+# Answerable items: expect answerable=true and non-empty citations.
+# Unanswerable items: expect answerable=false and empty citations.
+tests:
+  # --- Answerable: First Party Collection/Use ---
+  - description: "AOL data collection — answerable"
+    vars:
+      query: "what personal information does AOL collect about users?"
+      policy_id: "1034_aol_com"
+    assert:
+      # Answer must be a valid JSON object
+      - type: javascript
+        value: |
+          (() => {
+            try { JSON.parse(output); return true; }
+            catch { return "output is not valid JSON: " + output; }
+          })()
+      # answerable must be true
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return ans.answerable === true || "Expected answerable=true, got: " + JSON.stringify(ans.answerable);
+          })()
+      # citations must be non-empty
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            if (!Array.isArray(ans.citations) || ans.citations.length === 0) {
+              return "Expected non-empty citations, got: " + JSON.stringify(ans.citations);
+            }
+            return true;
+          })()
+      # each citation must have chunk_id, section, quote
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            for (const c of (ans.citations || [])) {
+              if (!c.chunk_id || !c.section || !c.quote) {
+                return "Citation missing required fields: " + JSON.stringify(c);
+              }
+            }
+            return true;
+          })()
+      # text must not be the abstention message
+      - type: not-contains
+        value: "The policy doesn't address this question"
+
+  # --- Answerable: Data Security ---
+  - description: "redorbit.com security — answerable"
+    vars:
+      query: "how does redorbit.com protect user information?"
+      policy_id: "1028_redorbit_com"
+    assert:
+      - type: javascript
+        value: |
+          (() => {
+            try { JSON.parse(output); return true; }
+            catch { return "output is not valid JSON: " + output; }
+          })()
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return ans.answerable === true || "Expected answerable=true, got: " + ans.answerable;
+          })()
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return (ans.citations && ans.citations.length > 0) || "Expected non-empty citations";
+          })()
+
+  # --- Unanswerable: topic absent from OPP-115 policies ---
+  - description: "biometric data — unanswerable (topic absent)"
+    vars:
+      query: "do you collect biometric data such as fingerprints or facial scans?"
+      policy_id: "1034_aol_com"
+    assert:
+      - type: javascript
+        value: |
+          (() => {
+            try { JSON.parse(output); return true; }
+            catch { return "output is not valid JSON: " + output; }
+          })()
+      # answerable must be false
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return ans.answerable === false || "Expected answerable=false (unanswerable item), got: " + ans.answerable;
+          })()
+      # citations must be empty when unanswerable
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            if (!Array.isArray(ans.citations) || ans.citations.length > 0) {
+              return "Expected empty citations for unanswerable item, got: " + JSON.stringify(ans.citations);
+            }
+            return true;
+          })()
+      # text must be the abstention message
+      - type: contains
+        value: "The policy doesn't address this question"
+
+  # --- Unanswerable: GDPR legal basis ---
+  - description: "GDPR Article 6 — unanswerable (topic absent)"
+    vars:
+      query: "what legal basis do you rely on for processing data under GDPR Article 6?"
+      policy_id: "1050_honda_com"
+    assert:
+      - type: javascript
+        value: |
+          (() => {
+            try { JSON.parse(output); return true; }
+            catch { return "output is not valid JSON: " + output; }
+          })()
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return ans.answerable === false || "Expected answerable=false, got: " + ans.answerable;
+          })()
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return (Array.isArray(ans.citations) && ans.citations.length === 0)
+              || "Expected empty citations for unanswerable item";
+          })()
+
+  # --- Contract: policy_id must be echoed back ---
+  - description: "policy_id passthrough contract"
+    vars:
+      query: "does Honda share user data?"
+      policy_id: "1050_honda_com"
+    assert:
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return ans.policy_id === "1050_honda_com"
+              || "Expected policy_id=1050_honda_com, got: " + ans.policy_id;
+          })()
+
+  # --- Contract: model field must be present ---
+  - description: "model field present in response"
+    vars:
+      query: "what information does sci-news.com collect?"
+      policy_id: "1017_sci_news_com"
+    assert:
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return (typeof ans.model === "string" && ans.model.length > 0)
+              || "Expected non-empty model field, got: " + JSON.stringify(ans.model);
+          })()
+
+  # --- Answerable: Do Not Track ---
+  - description: "AOL Do Not Track — answerable"
+    vars:
+      query: "does AOL respond to Do Not Track browser signals?"
+      policy_id: "1034_aol_com"
+    assert:
+      - type: javascript
+        value: |
+          (() => {
+            try { JSON.parse(output); return true; }
+            catch { return "output is not valid JSON"; }
+          })()
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return ans.answerable === true || "Expected answerable=true";
+          })()
+
+  # --- Answerable: User Access ---
+  - description: "sci-news.com account deletion — answerable"
+    vars:
+      query: "how do I remove my information from sci-news.com?"
+      policy_id: "1017_sci_news_com"
+    assert:
+      - type: javascript
+        value: |
+          (() => {
+            try { JSON.parse(output); return true; }
+            catch { return "output is not valid JSON"; }
+          })()
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return ans.answerable === true || "Expected answerable=true";
+          })()
+
+  # --- Answerable: Policy Change ---
+  - description: "redorbit.com policy change notification — answerable"
+    vars:
+      query: "how will redorbit.com notify me of privacy policy changes?"
+      policy_id: "1028_redorbit_com"
+    assert:
+      - type: javascript
+        value: |
+          (() => {
+            try { JSON.parse(output); return true; }
+            catch { return "output is not valid JSON"; }
+          })()
+      - type: javascript
+        value: |
+          (() => {
+            const ans = JSON.parse(output);
+            return ans.answerable === true || "Expected answerable=true";
+          })()
+
+# Output configuration
+outputPath: "eval/promptfoo/results.json"

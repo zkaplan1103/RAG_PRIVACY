@@ -46,5 +46,13 @@ venv = ".venv"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+eval = [
+    "datasets>=2.0.0",
+    "langchain-anthropic>=0.3.0",
+    "pyyaml>=6.0.0",
+    "ragas>=0.1.0",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/policylens"]

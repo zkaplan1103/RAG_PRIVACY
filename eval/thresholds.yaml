@@ -1,0 +1,6 @@
+# PolicyLens eval thresholds — CI regression gate
+# CONTRACTS.md §9: faithfulness ≥ 0.80, abstention_accuracy ≥ 0.90
+# Note: recalibrate after first baseline run (golden_v1, full suite)
+
+faithfulness: 0.80
+abstention_accuracy: 0.90
