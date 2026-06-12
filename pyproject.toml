@@ -19,6 +19,7 @@ dependencies = [
     "pytest>=8.0.0",
     "numpy>=1.24,<2.0",
     "psycopg[binary,pool]>=3.3.4",
+    "langfuse>=2.0.0,<3.0.0",
 ]
 
 [project.scripts]
