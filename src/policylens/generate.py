@@ -25,6 +25,27 @@ __all__ = ["answer", "canned_answer", "Citation", "Answer", "TraceContext", "_Re
 
 ABSTENTION_TEXT = "The policy doesn't address this question."
 
+# Input bounds — mirrors the API contract (docs/CONTRACTS.md §10: "query: string
+# 1–500 chars"). Enforced here as defense-in-depth so answer() is safe regardless
+# of caller; the API handler maps the resulting ValueError to a 400.
+MAX_QUERY_CHARS = 500
+
+
+def _validate_inputs(query: str, policy_id: str) -> None:
+    """Reject malformed query/policy_id before any embedding or LLM call.
+
+    Raises ValueError on bad input (handler → HTTP 400). This bounds per-request
+    cost: an unbounded query would otherwise be embedded and sent to Claude.
+    """
+    if not isinstance(query, str) or not isinstance(policy_id, str):
+        raise ValueError("query and policy_id must be strings")
+    if not query.strip():
+        raise ValueError("query must be a non-empty string")
+    if len(query) > MAX_QUERY_CHARS:
+        raise ValueError(f"query exceeds {MAX_QUERY_CHARS} characters")
+    if not policy_id.strip():
+        raise ValueError("policy_id must be a non-empty string")
+
 _SYSTEM_PROMPT = """\
 You are a privacy-policy analyst. You answer questions about privacy policies \
 using ONLY the numbered clauses provided below. Do not use any outside knowledge.
@@ -133,7 +154,11 @@ def answer(
 
     Signature is frozen — see docs/CONTRACTS.md §3.
     Tracing is transparent: failures are swallowed so the answer is always returned.
+
+    Raises ValueError on malformed input (empty/oversized query, non-string args);
+    the API handler maps this to HTTP 400 before any cost is incurred.
     """
+    _validate_inputs(query, policy_id)
     with trace_answer(query=query, policy_id=policy_id, cfg=cfg) as _obs:
         return _answer_impl(query, policy_id, retriever, cfg, _obs)
 

@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from src.policylens.config import Config
 from src.policylens.generate import (
     ABSTENTION_TEXT,
+    MAX_QUERY_CHARS,
     _short_quote,
     answer,
     canned_answer,
@@ -161,3 +162,54 @@ def test_canned_answer_schema():
     assert a["citations"]
     for c in a["citations"]:
         assert all(k in c for k in ("chunk_id", "section", "quote"))
+
+
+# ---------------------------------------------------------------------------
+# Input validation (defense-in-depth before any embed/LLM call; handler → 400)
+# ---------------------------------------------------------------------------
+
+class _ExplodingRetriever:
+    """Fails if retrieve() is ever called — proves validation short-circuits first."""
+
+    def retrieve(self, query: str, policy_id: str, k: int = 5) -> list[RetrievedChunk]:
+        raise AssertionError("retrieve() must not run when inputs are invalid")
+
+
+def _assert_rejected_before_retrieval(query: object, policy_id: object) -> None:
+    import pytest
+
+    cfg = Config(score_floor=0.30)
+    with pytest.raises(ValueError):
+        answer(query, policy_id, _ExplodingRetriever(), cfg)  # type: ignore[arg-type]
+
+
+def test_rejects_empty_query():
+    _assert_rejected_before_retrieval("", "test_policy")
+
+
+def test_rejects_whitespace_only_query():
+    _assert_rejected_before_retrieval("   \n\t ", "test_policy")
+
+
+def test_rejects_oversized_query():
+    _assert_rejected_before_retrieval("x" * (MAX_QUERY_CHARS + 1), "test_policy")
+
+
+def test_accepts_query_at_max_length():
+    # Exactly MAX_QUERY_CHARS is valid → it must reach retrieval (which abstains here).
+    cfg = Config(score_floor=0.30)
+    retriever = FakeRetriever([])
+    result = answer("x" * MAX_QUERY_CHARS, "test_policy", retriever, cfg)
+    assert result["answerable"] is False
+
+
+def test_rejects_empty_policy_id():
+    _assert_rejected_before_retrieval("a real question", "")
+
+
+def test_rejects_non_string_query():
+    _assert_rejected_before_retrieval(12345, "test_policy")
+
+
+def test_rejects_non_string_policy_id():
+    _assert_rejected_before_retrieval("a real question", None)
