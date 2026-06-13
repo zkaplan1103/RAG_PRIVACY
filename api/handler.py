@@ -364,14 +364,22 @@ def _parse_and_validate(
     Returns (query, policy_id, top_k) on success, or an error response dict.
     All validation happens BEFORE any embedding or LLM call.
     """
-    # --- Body size guard (before JSON parse) ---
-    raw_body: str = event.get("body") or ""
-    if isinstance(raw_body, str):
-        body_bytes = len(raw_body.encode("utf-8"))
+    # --- Body type guard (before anything else) ---
+    # A valid API Gateway proxy event delivers `body` as a JSON string (or it is
+    # absent → None). Anything else (dict/list/int from a direct/console invoke)
+    # is malformed: reject as 400 here rather than letting len()/json.loads()
+    # raise an unhandled TypeError — that would surface as a 502 with the full
+    # traceback written to CloudWatch (info leak + §10 contract violation).
+    raw_body_obj = event.get("body")
+    if raw_body_obj is None:
+        raw_body = ""
+    elif isinstance(raw_body_obj, str):
+        raw_body = raw_body_obj
     else:
-        body_bytes = len(raw_body)
+        return _error_response(400, "Request body must be a JSON string", request_id)
 
-    if body_bytes > MAX_BODY_BYTES:
+    # --- Body size guard (before JSON parse) ---
+    if len(raw_body.encode("utf-8")) > MAX_BODY_BYTES:
         return _error_response(413, "Request body too large (max 8 KB)", request_id)
 
     # --- JSON parse ---
@@ -475,7 +483,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         pass  # Let handler proceed; answer() will surface missing key errors
 
     # --- Validation (before any cost) ---
-    validation_result = _parse_and_validate(event, request_id)
+    # Wrapped defensively: _parse_and_validate should only ever return an error
+    # response dict for bad input, but if it ever raises we must still emit the
+    # contractual 500 shape, never a 502 with a leaked traceback.
+    try:
+        validation_result = _parse_and_validate(event, request_id)
+    except Exception:  # noqa: BLE001
+        logger.error("validation_crash request_id=%s", request_id)
+        return _error_response(500, "Internal server error", request_id)
+
     if isinstance(validation_result, dict):
         # Already an error response
         return validation_result
