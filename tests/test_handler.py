@@ -17,15 +17,11 @@ monkeypatched to avoid any real embedding or LLM calls.
 """
 from __future__ import annotations
 
-import importlib
 import json
 import sys
-import types
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Path setup: make api/ and src/ importable
@@ -427,8 +423,8 @@ class TestGate:
 
     def test_gate_skips_nan_metric(self):
         """NaN (dry run / no API key) should not cause a failure."""
+
         from eval.gate import check_gate
-        import math
         report = self._make_report(faith=float("nan"), abst=float("nan"))
         report["ragas"]["faithfulness"] = None  # JSON serialization of NaN
         report["house_metrics"]["abstention_accuracy"] = None
