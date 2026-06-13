@@ -37,7 +37,7 @@ Expected: 0 errors from both.
 
 ## 2. pgvector connection and parity spot-check
 
-**Prerequisite:** `SUPABASE_DB_URL` set; backfill complete (SETUP_TASKS Step 4.2).
+**Prerequisite:** `SUPABASE_DB_URL` set; backfill complete (SETUP_TASKS Step 4.1).
 
 ### 2a. pgvector connection
 

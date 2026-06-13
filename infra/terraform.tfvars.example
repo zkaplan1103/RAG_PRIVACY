@@ -24,7 +24,12 @@ api_quota_per_day  = 1000
 # CORS: set to your actual frontend origin, or "" to disable CORS headers.
 allowed_cors_origin = "https://your-app.example.com"
 
-# Retrieval backend: "pgvector" for production, "chroma" for local dev
+# Retrieval backend: "pgvector" for production, "chroma" for local dev.
+# WARNING: only set this to "pgvector" AFTER the Supabase backfill is confirmed
+# (SETUP_TASKS Group 4) and the SUPABASE_DB_URL secret holds a working DSN.
+# Deploying with "pgvector" before backfill points the Lambda at an empty/absent
+# table and every request will fail. Until then, leave commented to use the
+# built-in default, or set "chroma" if your image ships a Chroma index.
 retrieval_backend = "pgvector"
 
 # SETUP: set known_policy_ids to the comma-separated list of policy IDs

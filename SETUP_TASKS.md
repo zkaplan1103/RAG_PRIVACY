@@ -314,41 +314,22 @@ aws sts get-caller-identity             # should return your account JSON
 
 ---
 
-### Step 4.1 — Run the pgvector schema migration
+### Step 4.1 — Apply the schema and backfill (one command)
 
-This creates the `chunks` table, indexes, and enables `tsvector`. The script is
-idempotent — safe to re-run.
+The migration script does **both** in a single idempotent run: it applies the
+schema (`chunks` table, HNSW + GIN indexes, `tsvector`) from `infra/sql/001_init.sql`,
+then backfills all 2,393 chunk embeddings into pgvector. It reuses your local
+Chroma embedding cache so it does **not** re-embed (avoids ~2,393 embeddings);
+pass `--no-reuse-chroma` only if you want to force fresh embedding. Takes ~2 min.
 
-```bash
-SUPABASE_DB_URL="..." \
-  uv run python src/policylens/migrate_pgvector.py
-```
-
-**How to verify this worked:**
-```bash
-SUPABASE_DB_URL="..." uv run python -c "
-import psycopg
-conn = psycopg.connect('$SUPABASE_DB_URL')
-cur = conn.execute(\"SELECT COUNT(*) FROM chunks\")
-print('rows in chunks table:', cur.fetchone()[0])
-conn.close()
-"
-# After migration only (before backfill): 0 rows
-# Expected: 0 or the count from a previous run
-```
-
----
-
-### Step 4.2 — Run the backfill (Chroma → pgvector)
-
-Copies all 2,393 chunk embeddings from your local Chroma store into pgvector.
-Reuses cached Chroma embeddings to avoid re-embedding. Takes ~2 minutes.
-
-Prerequisite: Chroma index built (Step 1.2).
+The DSN is read from the `SUPABASE_DB_URL` env var. Prerequisite: Chroma index
+built (Step 1.2) so the embedding cache exists.
 
 ```bash
 SUPABASE_DB_URL="..." \
-  uv run python src/policylens/migrate_pgvector.py --backfill
+  uv run python -m policylens.migrate_pgvector
+# Optional flags: --chunks <path>  --batch-size 100  --no-reuse-chroma
+# On success it prints: "Migration complete: 2393 chunks in pgvector."
 ```
 
 **How to verify this worked:**
@@ -363,9 +344,11 @@ conn.close()
 # Expected: rows in chunks table: 2393
 ```
 
+> Safe to re-run: the upsert is idempotent, so a second run won't duplicate rows.
+
 ---
 
-### Step 4.3 — Spot-check pgvector retrieval
+### Step 4.2 — Spot-check pgvector retrieval
 
 ```bash
 SUPABASE_DB_URL="..." uv run python -c "
