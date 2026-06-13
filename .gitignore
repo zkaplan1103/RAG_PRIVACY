@@ -22,6 +22,18 @@ data/index/
 .env.*
 *.env
 
+# Terraform — never commit state or credentials
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+infra/terraform.tfvars
+infra/.build/
+
+# Eval reports (generated; large; use artifacts instead)
+eval/ragas/report_*.json
+
 # Misc
 .DS_Store
 *.log
