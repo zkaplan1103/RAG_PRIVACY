@@ -1,0 +1,164 @@
+===============================================================================
+ PolicyLens — Setup Brief (plain-English walkthrough)
+===============================================================================
+
+This is the narrative version of SETUP_TASKS.md — it explains the WHY so you
+don't mess anything up. SETUP_TASKS.md has the exact commands + a "how to verify"
+check for each sub-step; infra/SETUP_NOTES.md has the AWS CLI specifics;
+TESTING_CHECKLIST.md is the end-to-end verification once it's all wired.
+
+You're turning a working local demo into a live, deployed API. Four external
+services are involved, each with its own account and key(s).
+
+GOLDEN RULE: money protection comes BEFORE deployment. Everything is ordered so
+nothing can cost you unboundedly.
+
+-------------------------------------------------------------------------------
+ WHERE KEYS GO (the most common mistake is mixing these up)
+-------------------------------------------------------------------------------
+There are THREE separate homes for secrets:
+
+  1. AWS Secrets Manager  -> keys the RUNNING Lambda needs (Anthropic key, DB
+                             URL, your API key). Encrypted in the cloud; the
+                             Lambda reads them at startup.
+  2. GitHub repo secrets  -> keys CI needs to run the eval job. Same names,
+                             different place.
+  3. Your local shell     -> env vars, only for one-time local steps you run
+                             from your laptop (baseline eval, DB backfill).
+
+The code NEVER contains a key. You never paste a key into a source file.
+
+===============================================================================
+ STEP 0 — FINANCIAL BACKSTOPS  (DO THIS FIRST, before anything else)
+===============================================================================
+WHY: Your API calls Anthropic on YOUR key for every request. If someone floods
+the public endpoint, that's your bill. The auth + rate limits we built cap the
+blast radius, but the AWS Budget hard-stop is the actual circuit breaker — the
+thing that physically stops spending. Set it before any cloud resource exists,
+so there's never a window where you're exposed.
+
+Three things, all in web consoles (no code):
+  1. AWS Budgets -> create a monthly budget (e.g. $20) with a BUDGET ACTION that
+     disables the API at 100%. This is your wallet's kill switch.
+  2. AWS CloudWatch billing alarms at 50% and 80% -> email you before the cap.
+  3. Anthropic Console -> set a spend limit / credit ceiling, and turn OFF
+     auto-recharge. So even if AWS kept calling, Anthropic stops at your ceiling.
+
+VERIFY: you get a test email from the billing alarm; the budget shows in the
+AWS Budgets dashboard.
+
+===============================================================================
+ STEP 1 — BASELINE EVAL  (before any cloud setup)
+===============================================================================
+WHY: A hard rule in the project plan. Before switching to the production
+database, run the quality eval against the CURRENT local system and save the
+score as baseline_v1.json. That number becomes the yardstick — every future
+deploy is checked against it to prove quality didn't regress. Skip it and the
+regression gate is meaningless.
+
+Needs ONLY your Anthropic API key, set as a local env var. Run from your laptop.
+Costs a few dollars of Anthropic usage (the only "spend" step before deploy).
+
+  *** IMPORTANT: the citation-handling logic changed recently (a security fix
+      that makes the system ABSTAIN instead of inventing a citation). So this
+      baseline must be (re-)captured AFTER that fix — any older baseline_v1.json
+      is invalid as the regression anchor. eval/thresholds.yaml is annotated
+      with this. Let the measured baseline dictate gate thresholds; don't adjust
+      them blind. ***
+
+VERIFY: eval/baselines/baseline_v1.json exists with faithfulness/abstention
+scores.
+
+===============================================================================
+ STEP 2 — CREATE THE ACCOUNTS
+===============================================================================
+WHY each exists:
+  - AWS       -> hosts the API (Lambda runs your code, API Gateway = front door)
+  - Supabase  -> production database (Postgres + pgvector for vector search).
+                 Replaces the local Chroma store.
+  - LangFuse  -> observability: traces every answer's cost/latency. OPTIONAL —
+                 if you skip it, tracing silently no-ops and nothing breaks.
+  - Anthropic -> you already have this (the key from Step 1).
+
+Supabase: create a project, ENABLE the pgvector extension, copy the connection
+string (the "DSN", looks like postgresql://...).
+LangFuse: create a project, copy the public + secret keys.
+
+===============================================================================
+ STEP 3 — THE DATABASE  (Supabase pgvector)
+===============================================================================
+WHY: Your local demo uses Chroma; production uses Supabase. This copies your
+data over. ONE command does both the schema AND the data load — it reuses your
+local embeddings so it doesn't re-compute them.
+
+Run from your laptop with SUPABASE_DB_URL set in your shell. Do this BEFORE
+deploying, so the database is populated when the Lambda first points at it.
+(Deploying against an empty DB makes every request fail — there's a warning to
+this effect in infra/terraform.tfvars.example.)
+
+VERIFY: the chunks table shows 2393 rows.
+
+===============================================================================
+ STEP 4 — DEPLOY  (Terraform + Docker + Secrets)
+===============================================================================
+WHY this order: Terraform creates all the AWS resources (Lambda, API Gateway,
+IAM roles, the three empty secret slots). Then you build + push the container
+image. Then you fill the secrets. The endpoint is 403-BY-DEFAULT — it refuses
+all traffic until you put a key in the api_key secret, so there's no exposed
+window.
+
+Sub-steps, in order:
+  1. Create a DEPLOY IAM USER — a least-privilege AWS user for Terraform. NOT
+     AdministratorAccess (exact minimal policy is in infra/SETUP_NOTES.md). Why:
+     if that credential ever leaks, it can only touch this project's resources.
+  2. terraform init -> plan -> apply. 'plan' shows what it'll do before doing it;
+     read it.
+  3. Build + push the Docker image — your code + the ML models, ~1.8 GB
+     (~10 min first time).
+  4. Fill the THREE Secrets Manager secrets:
+       - policylens/anthropic_api_key
+       - policylens/supabase_db_url
+       - policylens/api_key
+     For api_key, GENERATE a strong random value (openssl rand -hex 32) and SAVE
+     IT SOMEWHERE SAFE — this is the key you (and any legit client) send in the
+     x-api-key header to call the API. It's your bouncer.
+  5. Populate KNOWN_POLICY_IDS — the allowlist of valid policy IDs (defaults to
+     the OPP-115 set if you skip it).
+
+VERIFY (this is the important security test):
+  - curl the endpoint WITHOUT the key   -> expect 403 (authorizer blocked it)
+  - curl WITH the key                    -> expect 200 + a cited answer
+  If the no-key call returns anything other than 403, STOP — auth isn't working.
+
+===============================================================================
+ STEP 5 — CI  (GitHub secrets)
+===============================================================================
+WHY: Your CI pipeline runs lint/type/test on every push for free. The EVAL job
+(which costs Anthropic money) only runs if it finds an ANTHROPIC_API_KEY GitHub
+secret — so it's opt-in. Add the secrets to activate it.
+
+Add to GitHub repo secrets (Settings -> Secrets -> Actions), names EXACTLY:
+  ANTHROPIC_API_KEY   (required for eval)
+  SUPABASE_DB_URL     (optional)
+  LANGFUSE_*          (optional)
+
+VERIFY: push a commit; the 'checks' job runs always, the 'eval' job runs only
+with the secret present.
+
+===============================================================================
+ STEP 6 — RECALIBRATE THE GATE
+===============================================================================
+WHY: The regression gate defaults to "faithfulness >= 0.80". Once you have
+baseline_v1.json, set the threshold relative to your ACTUAL measured baseline so
+the gate is meaningful for your system, not a guessed number.
+
+===============================================================================
+ ONE-PARAGRAPH MENTAL MODEL
+===============================================================================
+Step 0 protects your wallet. Step 1 establishes the quality yardstick. Steps 2-3
+stand up the real database. Step 4 deploys — and the endpoint stays locked (403)
+until you set your API key. Steps 5-6 wire up automated quality checks. Keys live
+in AWS Secrets Manager (running app) and GitHub secrets (CI), never in code. The
+two things that absolutely cannot be skipped: the AWS Budget hard-stop (Step 0)
+and verifying the no-key request returns 403 (Step 4).
+===============================================================================
