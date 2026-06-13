@@ -1,0 +1,184 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+# Cancel redundant runs on the same ref
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# ---------------------------------------------------------------------------
+# Job 1: checks — runs on EVERY push/PR, no secrets needed
+# ---------------------------------------------------------------------------
+jobs:
+  checks:
+    name: Lint / Type / Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # HF model downloads are slow; cache reduces this to ~5 min
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      # Cache uv's package store (compiled wheels, not just sdists)
+      - name: Cache uv store
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            uv-${{ runner.os }}-
+
+      # Cache HuggingFace model weights — bge-small + bge-reranker-base ~710 MB
+      # test_retrieval.py downloads and builds the index (~30 min without cache).
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-bge-small-bge-reranker
+          # No hashFiles here — model weights are stable by name, not by our files.
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Type check (pyright)
+        run: uv run pyright
+
+      # Run fast tests first (fail-fast=true so they short-circuit before slow ones).
+      # test_retrieval.py is the slow file (~30 min CPU without model cache) —
+      # it runs AFTER all fast tests pass, in a separate step.
+      - name: Test — fast suite (fail-fast)
+        run: |
+          uv run pytest tests/ \
+            --ignore=tests/test_retrieval.py \
+            -v \
+            --tb=short \
+            -x
+
+      # Slow file runs separately so fast failures are surfaced immediately.
+      - name: Test — slow retrieval tests (uses HF cache)
+        run: |
+          uv run pytest tests/test_retrieval.py \
+            -v \
+            --tb=short
+
+      # Smoke test (make smoke uses the stub, no index or API key needed)
+      - name: Smoke test (stub)
+        run: make smoke
+
+# ---------------------------------------------------------------------------
+# Job 2: eval — runs ONLY when ANTHROPIC_API_KEY secret is available
+# Fails the build if faithfulness < threshold or abstention gate fails.
+# ---------------------------------------------------------------------------
+  eval:
+    name: Eval / Faithfulness Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Guard: skip entirely when the secret is absent (forks, keyless PRs).
+    # GitHub sets secrets to "" in forks, not to the secret value.
+    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Cache uv store
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-eval-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            uv-eval-${{ runner.os }}-
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-bge-small-bge-reranker
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+
+      - name: Install dependencies (including eval group)
+        run: uv sync --group eval
+
+      - name: Run promptfoo dry-parse
+        # Validates the promptfoo YAML config without running LLM calls
+        run: |
+          if command -v promptfoo &> /dev/null; then
+            promptfoo eval --config eval/promptfoo/promptfooconfig.yaml --dry-run
+          else
+            echo "promptfoo not installed — skipping (install with: npm i -g promptfoo)"
+          fi
+
+      - name: Run Ragas harness
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+          FAITHFULNESS_THRESHOLD: ${{ vars.FAITHFULNESS_THRESHOLD }}
+        run: |
+          # Use chroma backend (zero-cloud, only needs ANTHROPIC_API_KEY)
+          # unless SUPABASE_DB_URL is set, in which case use pgvector.
+          if [ -n "$SUPABASE_DB_URL" ]; then
+            BACKEND="pgvector"
+          else
+            BACKEND="chroma"
+          fi
+
+          TIMESTAMP=$(date +%Y%m%dT%H%M%S)
+          REPORT="eval/ragas/report_ci_${BACKEND}_${TIMESTAMP}.json"
+
+          echo "Running Ragas harness (backend=$BACKEND) ..."
+          uv run python eval/ragas/run_ragas.py \
+            --golden eval/golden/golden_v1.jsonl \
+            --backend "$BACKEND" \
+            --out "$REPORT"
+
+          echo "RAGAS_REPORT=$REPORT" >> $GITHUB_ENV
+
+      - name: Faithfulness + abstention gate
+        env:
+          FAITHFULNESS_THRESHOLD: ${{ vars.FAITHFULNESS_THRESHOLD }}
+        run: |
+          # eval/gate.py exits non-zero if faithfulness or abstention_accuracy
+          # are below threshold. This step failing FAILS THE BUILD.
+          uv run python eval/gate.py \
+            --report "$RAGAS_REPORT" \
+            --thresholds eval/thresholds.yaml
+
+      - name: Upload eval report (artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ragas-report-${{ github.run_id }}
+          path: eval/ragas/report_ci_*.json
+          retention-days: 30

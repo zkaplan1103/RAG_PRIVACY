@@ -1,0 +1,39 @@
+# PolicyLens — Terraform variable values example
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is git-ignored; NEVER commit real credentials.
+
+aws_region = "us-east-1"
+app_name   = "policylens"
+
+# SETUP: build and push the Lambda container image first (see api/Dockerfile),
+# then set this to the pushed image URI.
+ecr_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/policylens-lambda:abc1234"
+
+# Lambda sizing — bge-reranker-base requires ≥2048 MB
+lambda_memory_mb     = 3008
+lambda_timeout_seconds = 30
+
+# Aligned with PgVectorRetriever pool max_size=5 (src/policylens/pgvector.py)
+lambda_reserved_concurrency = 5
+
+# API Gateway throttling (tune as needed)
+api_throttle_rate  = 5    # req/s sustained
+api_throttle_burst = 10   # burst
+api_quota_per_day  = 1000
+
+# CORS: set to your actual frontend origin, or "" to disable CORS headers.
+allowed_cors_origin = "https://your-app.example.com"
+
+# Retrieval backend: "pgvector" for production, "chroma" for local dev
+retrieval_backend = "pgvector"
+
+# SETUP: set known_policy_ids to the comma-separated list of policy IDs
+# loaded in your index. If empty, the handler uses the built-in OPP-115 list.
+known_policy_ids = ""
+
+# LangFuse tracing (optional — leave empty to disable)
+langfuse_host       = ""
+langfuse_public_key = ""
+langfuse_secret_key = ""
+
+log_retention_days = 30
