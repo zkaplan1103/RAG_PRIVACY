@@ -1,6 +1,16 @@
 # PolicyLens eval thresholds — CI regression gate
 # CONTRACTS.md §9: faithfulness ≥ 0.80, abstention_accuracy ≥ 0.90
 # Note: recalibrate after first baseline run (golden_v1, full suite)
+#
+# BEHAVIOR CHANGE NOTE (2026-06-13, red-team fix):
+# generate.py now ABSTAINS instead of fabricating a citation when the LLM
+# produces no valid in-range [N] markers.  Any prior baseline_v1.json captured
+# before this fix is no longer directly comparable — the abstention rate will
+# be HIGHER after the fix.  Re-run the baseline after this commit to establish
+# a new anchor.  The abstention_accuracy gate is expected to improve (more
+# correct abstentions) but answerable_accuracy may dip slightly if some
+# answerable items' models omit markers (a recall risk).  Adjust thresholds
+# after reviewing the new baseline.
 
 faithfulness: 0.80
 abstention_accuracy: 0.90

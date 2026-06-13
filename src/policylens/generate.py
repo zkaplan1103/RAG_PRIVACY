@@ -129,15 +129,12 @@ def _build_citations(
                     quote=_short_quote(hit["chunk"]["text"], query),
                 ))
 
-    # If model answered but cited nothing, cite the top hit as fallback
-    if not citations and hits:
-        top = hits[0]
-        citations.append(Citation(
-            chunk_id=top["chunk"]["chunk_id"],
-            section=top["chunk"]["section"],
-            quote=_short_quote(top["chunk"]["text"], query),
-        ))
-
+    # If model produced an answer but cited no valid in-range [N] markers,
+    # return an empty list — the caller treats this as a fabrication signal and
+    # abstains rather than inventing a citation.  (Bug fix: the old fallback of
+    # citing hits[0] meant a model that never said [1] could still return
+    # answerable=True with a fabricated citation — violating the "abstain over
+    # guess" golden rule.)
     return citations
 
 
@@ -242,8 +239,11 @@ def _answer_impl(
     input_tokens = response.usage.input_tokens if response.usage else 0
     output_tokens = response.usage.output_tokens if response.usage else 0
 
-    # Post-LLM abstention
-    if raw.upper().startswith("UNANSWERABLE") or raw.upper() == "UNANSWERABLE":
+    # Post-LLM abstention — match ONLY when the model replied with exactly the
+    # UNANSWERABLE sentinel (rule 3 of _SYSTEM_PROMPT: "reply with exactly:
+    # UNANSWERABLE").  Using startswith would wrongly abstain on legitimate
+    # answers that begin "Unanswerable? No — ...".
+    if raw.strip().upper() == "UNANSWERABLE":
         result = Answer(
             answerable=False,
             text=ABSTENTION_TEXT,
@@ -265,6 +265,30 @@ def _answer_impl(
         return result
 
     citations = _build_citations(raw, good_hits, query)
+
+    # If the model wrote a prose answer but included no valid in-range [N]
+    # markers, we cannot verify any citation.  Abstain rather than fabricate.
+    if not citations:
+        result = Answer(
+            answerable=False,
+            text=ABSTENTION_TEXT,
+            citations=[],
+            policy_id=policy_id,
+            model=cfg.gen_model,
+        )
+        try:
+            obs.record_generate(
+                model=cfg.gen_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                abstention_path="no_valid_citation",
+                latency_ms=gen_ms,
+            )
+            update_trace_answer_metadata(obs, answerable=False, n_citations=0)
+        except Exception:
+            pass
+        return result
+
     try:
         obs.record_generate(
             model=cfg.gen_model,

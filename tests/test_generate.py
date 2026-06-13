@@ -213,3 +213,64 @@ def test_rejects_non_string_query():
 
 def test_rejects_non_string_policy_id():
     _assert_rejected_before_retrieval("a real question", None)
+
+
+# ---------------------------------------------------------------------------
+# Citation-integrity fixes (red-team finding #2 and #3)
+# ---------------------------------------------------------------------------
+
+
+def test_no_valid_marker_abstains() -> None:
+    """Finding #2: model answers with no [N] markers → abstain, not fabricate."""
+    cfg = Config(score_floor=0.30)
+    hits = [_make_chunk("p::sec::c000", "We collect email addresses.", score=0.80)]
+    retriever = FakeRetriever(hits)
+    with _mock_anthropic("The policy collects email addresses."):
+        result = answer("What data is collected?", "test_policy", retriever, cfg)
+    assert result["answerable"] is False
+    assert result["citations"] == []
+    assert result["text"] == ABSTENTION_TEXT
+
+
+def test_out_of_range_marker_abstains() -> None:
+    """Finding #2: [99] is out of range for a 1-hit context → abstain."""
+    cfg = Config(score_floor=0.30)
+    hits = [_make_chunk("p::sec::c000", "We collect email addresses.", score=0.80)]
+    retriever = FakeRetriever(hits)
+    with _mock_anthropic("The policy collects email addresses [99]."):
+        result = answer("What data is collected?", "test_policy", retriever, cfg)
+    assert result["answerable"] is False
+    assert result["citations"] == []
+
+
+def test_marker_zero_abstains() -> None:
+    """Finding #2: [0] is not a valid 1-indexed reference → abstain."""
+    cfg = Config(score_floor=0.30)
+    hits = [_make_chunk("p::sec::c000", "We collect email addresses.", score=0.80)]
+    retriever = FakeRetriever(hits)
+    with _mock_anthropic("The policy collects email addresses [0]."):
+        result = answer("What data is collected?", "test_policy", retriever, cfg)
+    assert result["answerable"] is False
+    assert result["citations"] == []
+
+
+def test_unanswerable_prefix_not_sentinel() -> None:
+    """Finding #3: 'Unanswerable? No — ...' with a valid [1] must NOT abstain."""
+    cfg = Config(score_floor=0.30)
+    hits = [_make_chunk("p::sec::c000", "We collect email addresses.", score=0.80)]
+    retriever = FakeRetriever(hits)
+    with _mock_anthropic("Unanswerable? No — the policy does collect emails [1]."):
+        result = answer("What data is collected?", "test_policy", retriever, cfg)
+    assert result["answerable"] is True
+    assert len(result["citations"]) >= 1
+
+
+def test_unanswerable_exact_still_abstains() -> None:
+    """Finding #3: exact 'UNANSWERABLE' sentinel still triggers abstention."""
+    cfg = Config(score_floor=0.30)
+    hits = [_make_chunk("p::sec::c000", "We collect email addresses.", score=0.80)]
+    retriever = FakeRetriever(hits)
+    with _mock_anthropic("UNANSWERABLE"):
+        result = answer("Does the policy cover biometrics?", "test_policy", retriever, cfg)
+    assert result["answerable"] is False
+    assert result["citations"] == []
