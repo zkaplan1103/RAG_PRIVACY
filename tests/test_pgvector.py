@@ -668,7 +668,11 @@ def test_real_reranker_on_fixture() -> None:
     pairs: list[tuple[str, str]] = [(query, c["text"]) for c in fixture_chunks]
     import numpy as np
 
-    raw_scores: list[float] = reranker.predict(pairs).tolist()  # type: ignore[union-attr]
+    # NOTE: do not call reranker.predict(...).tolist() directly — CrossEncoder.predict's
+    # overloaded ndarray/Tensor return type sends pyright's evaluator into an effectively
+    # infinite loop. Casting the model to Any sidesteps the overload resolution.
+    rr: Any = reranker
+    raw_scores: list[float] = [float(x) for x in rr.predict(pairs)]
     rescaled = _rescale_to_unit(raw_scores)
 
     # All scores in [0, 1]

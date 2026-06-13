@@ -124,7 +124,7 @@ class FixtureRetriever:
 # ---------------------------------------------------------------------------
 
 
-def make_retriever(cfg: Config) -> "ChromaRetriever | FixtureRetriever | object":
+def make_retriever(cfg: Config) -> Retriever:
     """Construct and return the appropriate Retriever for cfg.retrieval_backend.
 
     "chroma"   → ChromaRetriever(cfg)       [default; no new env vars needed]

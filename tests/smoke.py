@@ -6,8 +6,12 @@ Run with:
 """
 import os
 import sys
+from typing import TYPE_CHECKING
 
 sys.path.insert(0, ".")
+
+if TYPE_CHECKING:
+    from src.policylens.generate import Answer
 
 # Stub questions use fixture_policy (the 10-row fixture)
 SMOKE_QUESTIONS_STUB = [
@@ -39,14 +43,14 @@ def run_smoke(use_real: bool = False) -> None:
 
         retriever = make_retriever(DEFAULT_CONFIG)
 
-        def ask(q: str, pid: str) -> object:
+        def ask(q: str, pid: str) -> "Answer":
             return answer(q, pid, retriever, DEFAULT_CONFIG)
 
         questions = SMOKE_QUESTIONS_REAL
     else:
         from src.policylens.generate import canned_answer
 
-        def ask(q: str, pid: str) -> object:  # type: ignore[misc]
+        def ask(q: str, pid: str) -> "Answer":
             return canned_answer(policy_id=pid)
 
         questions = SMOKE_QUESTIONS_STUB
