@@ -94,6 +94,16 @@ variable "known_policy_ids" {
   default     = ""
 }
 
+variable "authorizer_result_ttl_seconds" {
+  description = <<-EOT
+    Seconds API Gateway caches an authorizer result per identity source (x-api-key).
+    Caching reduces authorizer Lambda invocations for repeat callers. 0 disables.
+    Kept short (default 300) so a rotated/revoked key takes effect quickly.
+  EOT
+  type        = number
+  default     = 300
+}
+
 variable "retrieval_backend" {
   description = "Retrieval backend: 'chroma' (local dev) or 'pgvector' (production)."
   type        = string

@@ -5,6 +5,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
   }
   # SETUP: add a backend block here for remote state (S3 + DynamoDB locking).
   # Example:
@@ -124,6 +128,19 @@ resource "aws_secretsmanager_secret" "supabase_db_url" {
   tags = local.common_tags
 }
 
+# The API key the Lambda authorizer checks every caller's x-api-key header
+# against. This is the credential that gates all access to POST /ask.
+resource "aws_secretsmanager_secret" "api_key" {
+  name        = "${local.name_prefix}/api_key"
+  description = "Shared API key required on the x-api-key header for POST /ask"
+  # SETUP: after terraform apply, generate a strong key and store it, e.g.:
+  #   aws secretsmanager put-secret-value \
+  #     --secret-id policylens/api_key \
+  #     --secret-string "$(openssl rand -hex 32)"
+  # Distribute that value to legitimate clients; rotate by re-running put-secret-value.
+  tags = local.common_tags
+}
+
 # ---------------------------------------------------------------------------
 # IAM — Lambda execution role (least privilege)
 #
@@ -222,6 +239,90 @@ resource "aws_lambda_function" "ask" {
 }
 
 # ---------------------------------------------------------------------------
+# Lambda authorizer — enforces the x-api-key header in code.
+#
+# This is the primary anti-abuse control: API Gateway will NOT invoke the main
+# handler unless this authorizer returns isAuthorized=true. It is dependency-light
+# (boto3 only) so it ships as a zip and stays cheap on the auth hot path.
+# Source: api/authorizer.py. Fails closed on any error.
+# ---------------------------------------------------------------------------
+
+data "archive_file" "authorizer_zip" {
+  type        = "zip"
+  source_file = "${path.module}/../api/authorizer.py"
+  output_path = "${path.module}/.build/authorizer.zip"
+}
+
+resource "aws_iam_role" "authorizer_exec" {
+  name = "${local.name_prefix}-authorizer-exec"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "lambda.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_log_group" "authorizer_logs" {
+  name              = "/aws/lambda/${local.name_prefix}-authorizer"
+  retention_in_days = var.log_retention_days
+  tags              = local.common_tags
+}
+
+resource "aws_iam_role_policy" "authorizer_exec_policy" {
+  name = "${local.name_prefix}-authorizer-exec-policy"
+  role = aws_iam_role.authorizer_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+        ]
+        Resource = "${aws_cloudwatch_log_group.authorizer_logs.arn}:*"
+      },
+      # Read ONLY the API-key secret — nothing else.
+      {
+        Effect   = "Allow"
+        Action   = "secretsmanager:GetSecretValue"
+        Resource = aws_secretsmanager_secret.api_key.arn
+      },
+    ]
+  })
+}
+
+resource "aws_lambda_function" "authorizer" {
+  function_name    = "${local.name_prefix}-authorizer"
+  description      = "x-api-key authorizer for PolicyLens POST /ask"
+  role             = aws_iam_role.authorizer_exec.arn
+  handler          = "authorizer.handler"
+  runtime          = "python3.11"
+  filename         = data.archive_file.authorizer_zip.output_path
+  source_code_hash = data.archive_file.authorizer_zip.output_base64sha256
+  timeout          = 5
+  memory_size      = 128
+
+  environment {
+    variables = {
+      API_KEY_SECRET_ARN = aws_secretsmanager_secret.api_key.arn
+    }
+  }
+
+  depends_on = [aws_cloudwatch_log_group.authorizer_logs]
+  tags       = local.common_tags
+}
+
+# ---------------------------------------------------------------------------
 # API Gateway — HTTP API (payload format 2.0)
 # More cost-effective than REST API; supports throttling via usage plans
 # configured below.
@@ -254,17 +355,36 @@ resource "aws_apigatewayv2_integration" "lambda" {
   payload_format_version = "2.0"
 }
 
+# Lambda (REQUEST) authorizer on the HTTP API — enforces x-api-key in code.
+resource "aws_apigatewayv2_authorizer" "api_key" {
+  api_id                            = aws_apigatewayv2_api.api.id
+  authorizer_type                   = "REQUEST"
+  authorizer_uri                    = aws_lambda_function.authorizer.invoke_arn
+  identity_sources                  = ["$request.header.x-api-key"]
+  name                              = "${local.name_prefix}-apikey-authorizer"
+  authorizer_payload_format_version = "2.0"
+  enable_simple_responses           = true
+  authorizer_result_ttl_in_seconds  = var.authorizer_result_ttl_seconds
+}
+
+# Allow API Gateway to invoke the authorizer Lambda.
+resource "aws_lambda_permission" "apigw_invoke_authorizer" {
+  statement_id  = "AllowAPIGatewayInvokeAuthorizer"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.authorizer.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/authorizers/*"
+}
+
 resource "aws_apigatewayv2_route" "post_ask" {
-  api_id             = aws_apigatewayv2_api.api.id
-  route_key          = "POST /ask"
-  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
-  authorization_type = "NONE"
-  # NOTE: HTTP API v2 does not support API key auth natively.
-  # We use a Lambda authorizer approach instead: a request-parameter based
-  # API key check via a usage plan at the stage level.
-  # For the HTTP API, API key enforcement is at the stage level (see below).
-  # ALTERNATIVE: migrate to REST API if you need full API key + usage plan
-  # native support. See infra/SETUP_NOTES.md §api-key-auth.
+  api_id    = aws_apigatewayv2_api.api.id
+  route_key = "POST /ask"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+
+  # Auth is enforced HERE, in Terraform — no manual post-deploy step. Every
+  # request must pass the x-api-key authorizer before the handler is invoked.
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.api_key.id
 }
 
 resource "aws_apigatewayv2_stage" "prod" {
@@ -280,6 +400,18 @@ resource "aws_apigatewayv2_stage" "prod" {
 
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.api_access_logs.arn
+    format = jsonencode({
+      requestId        = "$context.requestId"
+      ip               = "$context.identity.sourceIp"
+      requestTime      = "$context.requestTime"
+      httpMethod       = "$context.httpMethod"
+      routeKey         = "$context.routeKey"
+      status           = "$context.status"
+      protocol         = "$context.protocol"
+      responseLength   = "$context.responseLength"
+      integrationError = "$context.integrationErrorMessage"
+      authorizerError  = "$context.authorizer.error"
+    })
   }
 
   tags = local.common_tags
@@ -301,24 +433,18 @@ resource "aws_lambda_permission" "apigw_invoke" {
 }
 
 # ---------------------------------------------------------------------------
-# API Key + Usage Plan (REST-style, via API Gateway V1 construct)
+# Abuse controls — what is enforced in Terraform vs. what remains a SETUP step
 #
-# NOTE: API Gateway HTTP API (v2) does not support native API key + usage plans.
-# We provision them using the V1 REST API alongside the HTTP API, or alternatively
-# use a Lambda authorizer. The recommended production approach is to front the
-# HTTP API with a separate WAF WebACL with an API key header check.
+# Enforced HERE, automatically, on every deploy:
+#   - API-KEY AUTH via the Lambda authorizer above (authorization_type=CUSTOM on
+#     POST /ask). No anonymous access; nothing to remember post-deploy.
+#   - Stage-level throttling: rate (var.api_throttle_rate) + burst
+#     (var.api_throttle_burst) on the HTTP API stage.
+#   - Lambda reserved concurrency: hard ceiling on simultaneous containers.
 #
-# For simplicity (and so terraform validate passes without a full REST API),
-# we document the pattern here and implement it as a SETUP step.
-# See infra/SETUP_NOTES.md §api-key-auth for the exact console/CLI steps.
-#
-# What IS enforced in Terraform:
-#   - Stage-level throttling (rate + burst) on the HTTP API stage above.
-#   - Lambda reserved concurrency (hard ceiling on containers).
+# NOT natively supported by HTTP API v2, so flagged in SETUP_NOTES.md:
+#   - Per-key DAILY QUOTA (var.api_quota_per_day). Rate+burst+concurrency already
+#     bound spend; a hard daily cap needs WAF rate-based rules or a REST API.
+#     The AWS Budget hard-stop (SETUP_NOTES §financial-backstops) is the
+#     authoritative dollar ceiling regardless.
 # ---------------------------------------------------------------------------
-
-# SETUP: After apply, follow SETUP_NOTES.md §api-key-auth to:
-#   1. Create an API key in the console or via CLI.
-#   2. Attach a usage plan with quota (1000/day by default) to the stage.
-#   3. Require the x-api-key header on POST /ask.
-# The stage-level throttle above provides rate limiting regardless.

@@ -25,6 +25,11 @@ output "supabase_db_url_secret_arn" {
   value       = aws_secretsmanager_secret.supabase_db_url.arn
 }
 
+output "api_key_secret_arn" {
+  description = "ARN of the Secrets Manager secret holding the x-api-key value. Fill value after apply."
+  value       = aws_secretsmanager_secret.api_key.arn
+}
+
 output "lambda_exec_role_arn" {
   description = "ARN of the least-privilege Lambda execution role."
   value       = aws_iam_role.lambda_exec.arn

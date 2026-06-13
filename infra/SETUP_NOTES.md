@@ -106,7 +106,7 @@ Verification: `docker run --rm -e ANTHROPIC_API_KEY=... policylens-lambda:$IMAGE
 
 ## Filling in Secrets Manager values
 
-After `terraform apply`, two empty secrets exist. Fill them in:
+After `terraform apply`, three empty secrets exist. Fill them in:
 
 ```bash
 # Anthropic API key
@@ -118,6 +118,12 @@ aws secretsmanager put-secret-value \
 aws secretsmanager put-secret-value \
   --secret-id policylens/supabase_db_url \
   --secret-string "postgresql://user:pass@host:5432/db?sslmode=require"
+
+# API key — the credential callers must send in the x-api-key header.
+# Generate a strong random value and KEEP IT SAFE (you distribute it to clients).
+aws secretsmanager put-secret-value \
+  --secret-id policylens/api_key \
+  --secret-string "$(openssl rand -hex 32)"
 ```
 
 Verification:
@@ -126,39 +132,45 @@ aws secretsmanager get-secret-value --secret-id policylens/anthropic_api_key \
   | jq -r .SecretString | cut -c1-6  # should print "sk-ant"
 ```
 
+> The API-key secret starts EMPTY. Until you put a value in it, the authorizer
+> fails closed and **every** request is rejected (403) — safe by default. The
+> endpoint never serves traffic anonymously, even before you finish setup.
+
 ---
 
 ## API key authentication (§api-key-auth)
 
-API Gateway HTTP API (v2) does not support native API key + usage plans.
-Options:
+**Auth is enforced automatically by Terraform — there is no manual auth wiring
+step.** `infra/main.tf` provisions a Lambda authorizer (`api/authorizer.py`)
+attached to `POST /ask` as a `CUSTOM` authorizer. API Gateway will not invoke
+the main handler unless the caller's `x-api-key` header matches the value in the
+`policylens/api_key` Secrets Manager secret (constant-time compare; fails closed
+on any error). Your only task is putting a key value into that secret (above).
 
-### Option A: AWS WAF (recommended for production)
-1. In the console: WAF → Web ACLs → Create web ACL, associate with the API.
-2. Add a rule: block requests where header `x-api-key` != your secret key.
-3. This enforces key auth before Lambda is ever invoked.
+Enforced in Terraform, on every deploy:
+- **API-key auth** via the Lambda authorizer (no anonymous access).
+- Stage-level throttle: 5 req/s sustained, burst 10 (`var.api_throttle_rate` / `var.api_throttle_burst`).
+- Lambda reserved concurrency: 5 (hard ceiling on containers, `var.lambda_reserved_concurrency`).
 
-### Option B: Lambda authorizer
-Deploy a Lambda authorizer that checks the `x-api-key` header. Wire it to
-the API route. The authorizer runs before the main handler.
+**Not** enforced natively by HTTP API v2 (optional hardening):
+- **Per-key daily quota** (`var.api_quota_per_day`, default 1000). Rate+burst+
+  concurrency already bound throughput; for a hard daily cap, attach an AWS WAF
+  rate-based rule to the API, or migrate to a REST API for native usage-plan
+  quotas. The **AWS Budget hard-stop** (see Financial backstops) is the
+  authoritative dollar ceiling regardless and is the recommended backstop.
 
-### Option C: Migrate to REST API
-If you need native API key + usage plan support (per-key quotas, tracking),
-replace `aws_apigatewayv2_api` with `aws_api_gateway_rest_api`. More setup;
-see Terraform AWS provider docs.
+To rotate the key: re-run the `put-secret-value` above with a new value. Callers
+pick up the change within `var.authorizer_result_ttl_seconds` (default 300s).
 
-Current enforcement regardless of choice:
-- Stage-level throttle: 5 req/s sustained, burst 10 (main.tf)
-- Lambda reserved concurrency: 5 (hard ceiling)
-
-Verification (once API key is configured):
+Verification (after the api_key secret has a value):
 ```bash
-# Should return 403
-curl -s https://<api_endpoint>/ask -d '{"query":"test","policy_id":"105_amazon_com"}'
+# No / wrong key → 403 from the authorizer (handler never runs)
+curl -s -o /dev/null -w '%{http_code}\n' https://<api_endpoint>/ask \
+  -d '{"query":"test","policy_id":"105_amazon_com"}'        # expect 403
 
-# Should proceed to validation
+# Correct key → proceeds to the handler
 curl -s https://<api_endpoint>/ask \
-  -H "x-api-key: your-key" \
+  -H "x-api-key: <your-key>" \
   -d '{"query":"test","policy_id":"105_amazon_com"}'
 ```
 
