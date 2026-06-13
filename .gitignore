@@ -37,3 +37,6 @@ eval/ragas/report_*.json
 # Misc
 .DS_Store
 *.log
+
+# Agent worktrees (transient; auto-cleaned)
+.claude/worktrees/
