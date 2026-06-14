@@ -40,3 +40,8 @@ eval/ragas/report_*.json
 
 # Agent worktrees (transient; auto-cleaned)
 .claude/worktrees/
+
+# Personal setup runbooks (not for public consumption)
+SETUP_BRIEF.txt
+SETUP_TASKS.md
+TESTING_CHECKLIST.md
