@@ -12,5 +12,5 @@
 # answerable items' models omit markers (a recall risk).  Adjust thresholds
 # after reviewing the new baseline.
 
-faithfulness: 0.80
+faithfulness: 0.85
 abstention_accuracy: 0.90

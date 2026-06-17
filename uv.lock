@@ -1421,6 +1421,20 @@ wheels = [
 ]
 
 [[package]]
+name = "langchain-huggingface"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "langchain-core" },
+    { name = "tokenizers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3f/15/f832ae485707bf52f9a8f055db389850de06c46bc6e3e4420a0ef105fbbf/langchain_huggingface-0.3.1.tar.gz", hash = "sha256:0a145534ce65b5a723c8562c456100a92513bbbf212e6d8c93fdbae174b41341", size = 25154, upload-time = "2025-07-22T17:22:26.77Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bf/26/7c5d4b4d3e1a7385863acc49fb6f96c55ccf941a750991d18e3f6a69a14a/langchain_huggingface-0.3.1-py3-none-any.whl", hash = "sha256:de10a692dc812885696fbaab607d28ac86b833b0f305bccd5d82d60336b07b7d", size = 27609, upload-time = "2025-07-22T17:22:25.282Z" },
+]
+
+[[package]]
 name = "langchain-openai"
 version = "0.3.35"
 source = { registry = "https://pypi.org/simple" }
@@ -2577,6 +2591,7 @@ dependencies = [
 eval = [
     { name = "datasets" },
     { name = "langchain-anthropic" },
+    { name = "langchain-huggingface" },
     { name = "pyyaml" },
     { name = "ragas" },
 ]
@@ -2604,6 +2619,7 @@ requires-dist = [
 eval = [
     { name = "datasets", specifier = ">=2.0.0" },
     { name = "langchain-anthropic", specifier = ">=0.3.0" },
+    { name = "langchain-huggingface", specifier = ">=0.1.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "ragas", specifier = ">=0.1.0" },
 ]

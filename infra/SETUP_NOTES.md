@@ -10,19 +10,17 @@ live AWS credentials. Grouped roughly in execution order.
 These are CONSOLE-ONLY steps (AWS doesn't support them via Terraform/CLI easily).
 Set them up BEFORE you run `terraform apply` or push any image.
 
-1. **AWS Budget hard-stop**: Create a Zero-Spend Budget or a monthly budget
-   alert in the AWS Billing console → Budgets. Set an action to notify (or
-   even block IAM) if spend exceeds your ceiling.
+1. **AWS Budget alert**: In the AWS Billing console → Budgets, create a
+   monthly cost budget (e.g. $20). Add email alerts at 80% and 100%. This
+   warns you when spend is rising — it does not automatically stop services.
 
-2. **Billing alarms**: In CloudWatch → Alarms, create a billing alarm for
-   e.g. $10/month to get an SNS email before costs spike.
+2. **Anthropic spend limit** (the actual hard stop): In the Anthropic
+   console → Billing, set a hard spend limit and turn OFF auto-recharge.
+   This physically blocks API calls once you hit the ceiling. This is the
+   real protection against runaway LLM costs.
 
-3. **Anthropic credit ceiling**: In the Anthropic console → Billing, set a
-   hard spend limit on your API key. This is independent of AWS spend and
-   limits LLM costs directly.
-
-Set all three BEFORE routing real traffic. These are the primary financial
-backstops against a scammer running up bills.
+Set both BEFORE routing real traffic. The Anthropic limit is the hard stop;
+the AWS Budget is the early warning.
 
 ---
 

@@ -194,9 +194,20 @@ def get_ragas_llm(judge_model: str) -> Any:
         raise ImportError(
             "langchain-anthropic not installed. Run: uv sync --group eval"
         ) from e
-    return ChatAnthropic(
+
+    _STRIPPED_KEYS = {"temperature", "top_p", "top_k"}
+
+    class _NoTempChatAnthropic(ChatAnthropic):  # type: ignore[misc]
+        """Strips temperature/top_p/top_k — Opus 4.7+ rejects them."""
+
+        def _get_request_payload(self, *args: Any, **kwargs: Any) -> dict:
+            payload = super()._get_request_payload(*args, **kwargs)
+            for k in _STRIPPED_KEYS:
+                payload.pop(k, None)
+            return payload
+
+    return _NoTempChatAnthropic(
         model=judge_model,
-        temperature=0.0,
         max_tokens=1024,
     )
 
@@ -224,18 +235,33 @@ def run_ragas_metrics(
             "ragas not installed. Run: uv sync --group eval"
         ) from e
 
+    from ragas.embeddings import LangchainEmbeddingsWrapper  # type: ignore[import]
+
+    try:
+        from langchain_huggingface import HuggingFaceEmbeddings  # type: ignore[import]
+    except ImportError as e:
+        raise ImportError(
+            "langchain-huggingface not installed. Run: uv sync --group eval"
+        ) from e
+
     llm = get_ragas_llm(judge_model)
     wrapped_llm = LangchainLLMWrapper(llm)
+    hf_embeddings = LangchainEmbeddingsWrapper(
+        HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+    )
 
     metrics = [faithfulness, answer_relevancy, context_precision, context_recall]
     for m in metrics:
         m.llm = wrapped_llm
+        if hasattr(m, "embeddings"):
+            m.embeddings = hf_embeddings
 
-    result = evaluate(dataset=dataset, metrics=metrics)
-    # result is a ragas EvaluationResult; convert to plain dict
+    result = evaluate(dataset=dataset, metrics=metrics, embeddings=hf_embeddings)
+    # result is a ragas EvaluationResult; extract mean scores from _repr_dict
+    means = getattr(result, "_repr_dict", {})
     scores: dict[str, float] = {}
     for k in ("faithfulness", "answer_relevancy", "context_precision", "context_recall"):
-        v = result.get(k)
+        v = means.get(k)
         scores[k] = float(v) if v is not None else float("nan")
     return scores
 
